@@ -30,6 +30,35 @@ function saoPauloDate(offsetDays = 0) {
   }).format(now);
 }
 
+function nthWeekday(year, month, weekday, occurrence) {
+  const first = new Date(Date.UTC(year, month - 1, 1));
+  const day = 1 + (7 + weekday - first.getUTCDay()) % 7 + (occurrence - 1) * 7;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function blackFriday(year) {
+  const thanksgiving = nthWeekday(year, 11, 4, 4);
+  const date = new Date(`${thanksgiving}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function marketingOpportunities() {
+  const currentYear = Number(saoPauloDate().slice(0, 4));
+  return [currentYear, currentYear + 1].flatMap(year => [
+    { key: `${year}-mulher`, name: "Dia da Mulher", date: `${year}-03-08` },
+    { key: `${year}-maes`, name: "Dia das Mães", date: nthWeekday(year, 5, 0, 2) },
+    { key: `${year}-namorados`, name: "Dia dos Namorados", date: `${year}-06-12` },
+    { key: `${year}-pais`, name: "Dia dos Pais", date: nthWeekday(year, 8, 0, 2) },
+    { key: `${year}-cliente`, name: "Dia do Cliente", date: `${year}-09-15` },
+    { key: `${year}-halloween`, name: "Halloween", date: `${year}-10-31` },
+    { key: `${year}-black-friday`, name: "Black Friday", date: blackFriday(year) },
+    { key: `${year}-natal`, name: "Natal", date: `${year}-12-25` },
+    { key: `${year + 1}-ano-novo`, name: "Ano-Novo", date: `${year + 1}-01-01` }
+  ]).filter((item, index, items) =>
+    items.findIndex(candidate => candidate.key === item.key) === index);
+}
+
 function brDateTime(value) {
   if (!value) return "";
   const [date, time = ""] = value.split(" ");
@@ -1320,6 +1349,47 @@ async function api(request, env, url) {
     `).all();
     return json(results);
   }
+  if (url.pathname === "/api/marketing/oportunidades" && request.method === "GET") {
+    const { results: links } = await db.prepare(`
+      SELECT mop.chave,mop.id_planejamento,pm.status
+      FROM marketing_oportunidade_planos mop
+      LEFT JOIN planejamento_marketing pm ON pm.id=mop.id_planejamento
+    `).all();
+    const today = saoPauloDate();
+    const todayTime = Date.parse(`${today}T12:00:00Z`);
+    return json(marketingOpportunities().map(item => {
+      const link = links.find(entry => entry.chave === item.key);
+      return {
+        ...item,
+        days: Math.round((Date.parse(`${item.date}T12:00:00Z`) - todayTime) / 86400000),
+        id_planejamento: link?.id_planejamento || null,
+        status: link?.status || "Não planejada"
+      };
+    }).filter(item => item.days >= -7).sort((a, b) => a.date.localeCompare(b.date)));
+  }
+  if (url.pathname === "/api/marketing/oportunidades/planejar" && request.method === "POST") {
+    const data = await body(request);
+    const opportunity = marketingOpportunities().find(item => item.key === data.key);
+    if (!opportunity) return error("Oportunidade inválida.");
+    const existing = await db.prepare(
+      "SELECT id_planejamento FROM marketing_oportunidade_planos WHERE chave=?"
+    ).bind(opportunity.key).first();
+    if (existing) return json({ ok: true, id: existing.id_planejamento });
+    const publishDate = new Date(`${opportunity.date}T12:00:00Z`);
+    publishDate.setUTCDate(publishDate.getUTCDate() - 7);
+    const created = await db.prepare(`
+      INSERT INTO planejamento_marketing
+        (titulo,tipo,descricao,status,data_inicio,data_fim,data_postagem)
+      VALUES(?,'Promoção',?,'Ideia',?,?,?)
+    `).bind(`Campanha de ${opportunity.name}`,
+      `Planejamento para aproveitar ${opportunity.name}.`,
+      publishDate.toISOString().slice(0, 10), opportunity.date,
+      publishDate.toISOString().slice(0, 10)).run();
+    await db.prepare(`
+      INSERT INTO marketing_oportunidade_planos(chave,id_planejamento) VALUES(?,?)
+    `).bind(opportunity.key, created.meta.last_row_id).run();
+    return json({ ok: true, id: created.meta.last_row_id }, 201);
+  }
   if (url.pathname === "/api/marketing" && request.method === "POST") {
     const data = await body(request);
     const created = await db.prepare(`
@@ -1381,6 +1451,8 @@ async function api(request, env, url) {
     return json({ ok: true });
   }
   if (marketingMatch && request.method === "DELETE") {
+    await db.prepare("DELETE FROM marketing_oportunidade_planos WHERE id_planejamento=?")
+      .bind(integer(marketingMatch[1])).run();
     await db.prepare("DELETE FROM marketing_artes WHERE id_planejamento=?")
       .bind(integer(marketingMatch[1])).run();
     await db.prepare("DELETE FROM planejamento_marketing WHERE id=?")

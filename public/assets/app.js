@@ -61,6 +61,7 @@ let profilePhotoData = "";
 let profileCrop = null;
 let marketingData = [];
 let marketingArtData = "";
+let marketingOpportunities = [];
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -326,7 +327,9 @@ async function loadStock() {
 }
 
 async function loadMarketing() {
-  marketingData = await api("/api/marketing");
+  [marketingData, marketingOpportunities] = await Promise.all([
+    api("/api/marketing"), api("/api/marketing/oportunidades")
+  ]);
   const month = $("#marketingMonth")?.value || todaySp().slice(0, 7);
   const status = $("#marketingStatus")?.value || "";
   const filtered = marketingData.filter(item => {
@@ -337,7 +340,30 @@ async function loadMarketing() {
   const boosted = filtered.filter(item => item.impulsionar).length;
   const boostCost = filtered.reduce((sum, item) =>
     sum + (item.impulsionar ? Number(item.orcamento || 0) : 0), 0);
-  $("#marketingPanel").innerHTML = `<div class="marketing-toolbar">
+  const upcoming = marketingOpportunities.filter(item => item.days >= 0).slice(0, 6);
+  const next = upcoming[0];
+  const attention = upcoming.filter(item =>
+    item.days <= 30 && !item.id_planejamento);
+  const guidance = item => !item.id_planejamento
+    ? item.days <= 30 ? "Criar campanha agora" : "Ainda há tempo para planejar"
+    : item.days <= 3 ? "Publicar e reforçar nos stories"
+      : item.days <= 7 ? "Finalizar arte e legenda"
+        : item.days <= 15 ? "Preparar conteúdo"
+          : "Definir oferta e estratégia";
+  $("#marketingPanel").innerHTML = `${next ? `<section class="marketing-next ${!next.id_planejamento && next.days <= 30 ? "needs-attention" : ""}">
+    <div><span class="eyebrow">PRÓXIMA OPORTUNIDADE</span><h2>${escapeHtml(next.name)}</h2>
+    <p>${dateBr(next.date)} · ${next.days === 0 ? "é hoje" : `faltam ${next.days} dias`} · ${guidance(next)}</p></div>
+    <button class="${next.id_planejamento ? "secondary open-opportunity-plan" : "primary plan-opportunity"}" data-key="${next.key}" data-id="${next.id_planejamento || ""}">${next.id_planejamento ? "Abrir campanha" : "Planejar campanha"}</button>
+  </section>` : ""}
+  ${attention.length ? `<div class="marketing-alert"><strong>${attention.length} oportunidade(s) precisam de planejamento nos próximos 30 dias.</strong></div>` : ""}
+  <h2>Calendário de oportunidades</h2>
+  <div class="opportunity-grid">${upcoming.map(item => `<article class="card opportunity-card ${!item.id_planejamento && item.days <= 30 ? "is-urgent" : ""}">
+    <div><strong>${escapeHtml(item.name)}</strong><small>${dateBr(item.date)} · ${item.days === 0 ? "Hoje" : `${item.days} dias`}</small><small>${guidance(item)}</small></div>
+    <span class="badge">${escapeHtml(item.status)}</span>
+    <button class="${item.id_planejamento ? "secondary open-opportunity-plan" : "primary plan-opportunity"}" data-key="${item.key}" data-id="${item.id_planejamento || ""}">${item.id_planejamento ? "Abrir" : "Planejar"}</button>
+  </article>`).join("")}</div>
+  <h2>Banco de campanhas</h2>
+  <div class="marketing-toolbar">
     <label>Mês<input id="marketingMonth" type="month" value="${month}"></label>
     <label>Status<select id="marketingStatus"><option value="">Todos</option>${["Ideia","Planejado","Produção","Agendado","Publicado","Encerrado"].map(value => `<option ${value === status ? "selected" : ""}>${value}</option>`).join("")}</select></label>
   </div>
@@ -1046,6 +1072,16 @@ document.addEventListener("click", event => {
   if (stockAction) openStockAction(stockAction.dataset.stockAction, stockAction.dataset.id);
   const marketingAction = event.target.closest("[data-marketing-action]");
   if (marketingAction) openMarketingPlan(marketingAction.dataset.id);
+  const opportunityPlan = event.target.closest(".plan-opportunity");
+  if (opportunityPlan) {
+    post("/api/marketing/oportunidades/planejar", { key: opportunityPlan.dataset.key })
+      .then(async result => {
+        await loadMarketing();
+        openMarketingPlan(result.id);
+      }).catch(error => toast(error.message));
+  }
+  const opportunityOpen = event.target.closest(".open-opportunity-plan");
+  if (opportunityOpen) openMarketingPlan(opportunityOpen.dataset.id);
   const marketingDelete = event.target.closest(".delete-marketing");
   if (marketingDelete && confirm("Excluir este planejamento?")) {
     api(`/api/marketing/${marketingDelete.dataset.id}`, { method: "DELETE" })
