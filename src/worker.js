@@ -105,21 +105,27 @@ async function listAppointments(db, url) {
         start: x.data_hora.replace(" ", "T"),
         extendedProps: { tipo: "agendamento", id_agendamento: x.id }
       }));
-    const payments = installments.map(x => ({
-      id: `crediario-${x.id}`,
-      title: `Crediário · ${x.nome} · Parcela ${x.numero_parcela}`,
-      start: x.data_vencimento,
-      allDay: true,
-      backgroundColor: "#36b37e",
-      borderColor: "#36b37e",
-      textColor: "#111214",
-      extendedProps: {
-        tipo: "crediario",
-        id_agendamento: x.id_agendamento,
-        valor: x.valor_parcela,
-        parcela: x.numero_parcela
-      }
-    }));
+    const today = saoPauloDate();
+    const payments = installments.map(x => {
+      const overdue = x.data_vencimento < today;
+      const color = overdue ? "#ef6262" : "#36b37e";
+      return {
+        id: `crediario-${x.id}`,
+        title: `Crediário · ${x.nome} · Parcela ${x.numero_parcela}`,
+        start: x.data_vencimento,
+        allDay: true,
+        backgroundColor: color,
+        borderColor: color,
+        textColor: "#111214",
+        extendedProps: {
+          tipo: "crediario",
+          id_agendamento: x.id_agendamento,
+          valor: x.valor_parcela,
+          parcela: x.numero_parcela,
+          vencida: overdue
+        }
+      };
+    });
     return json([...appointments, ...payments]);
   }
   const today = saoPauloDate();
