@@ -18,6 +18,7 @@ const send = (path, method, form) => api(path, {
 });
 
 let calendar;
+let selectedClientId = null;
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -62,6 +63,7 @@ async function loadClients(search = "") {
 }
 
 async function loadClient(id) {
+  selectedClientId = id;
   const [client, history, finance] = await Promise.all([
     api(`/api/clientes/${id}`), api(`/api/clientes/${id}/historico`), api(`/api/clientes/${id}/financeiro`)
   ]);
@@ -122,4 +124,91 @@ $("#clientSuggestions").onclick = event => {
   const item = event.target.closest(".suggestion"); if (!item) return;
   const form = $("#appointmentForm"); form.elements.id_cliente.value = item.dataset.id; form.elements.nome.value = item.dataset.name; form.elements.telefone.value = item.dataset.phone; $("#clientSuggestions").innerHTML = "";
 };
+
+function setupPullToRefresh() {
+  if (!window.matchMedia("(max-width: 800px)").matches || !("ontouchstart" in window)) return;
+
+  const indicator = $("#pullRefresh");
+  const icon = $(".pull-refresh-icon", indicator);
+  const label = $(".pull-refresh-text", indicator);
+  const threshold = 72;
+  const maxPull = 112;
+  let startY = 0;
+  let distance = 0;
+  let tracking = false;
+  let refreshing = false;
+
+  const reset = () => {
+    distance = 0;
+    tracking = false;
+    indicator.setAttribute("aria-hidden", "true");
+    indicator.removeAttribute("aria-busy");
+    indicator.style.setProperty("--pull-distance", "0px");
+    indicator.classList.remove("visible", "ready");
+    icon.textContent = "↓";
+    label.textContent = "Puxe para atualizar";
+  };
+
+  const refreshCurrentPage = async () => {
+    const activePage = $(".page.active")?.id;
+    if (activePage === "clientes") {
+      await loadClients($("#clientSearch").value);
+      if (selectedClientId) await loadClient(selectedClientId);
+    } else if (activePage === "financeiro") {
+      await loadFinance();
+    } else {
+      await loadAgenda();
+    }
+  };
+
+  window.addEventListener("touchstart", event => {
+    if (refreshing || window.scrollY > 0 || $("dialog[open]")) return;
+    startY = event.touches[0].clientY;
+    tracking = true;
+  }, { passive: true });
+
+  window.addEventListener("touchmove", event => {
+    if (!tracking || refreshing) return;
+    const delta = event.touches[0].clientY - startY;
+    if (delta <= 0 || window.scrollY > 0) return reset();
+
+    event.preventDefault();
+    distance = Math.min(maxPull, delta * 0.55);
+    indicator.setAttribute("aria-hidden", "false");
+    indicator.style.setProperty("--pull-distance", `${distance}px`);
+    indicator.classList.add("visible");
+    indicator.classList.toggle("ready", distance >= threshold);
+    icon.textContent = distance >= threshold ? "↑" : "↓";
+    label.textContent = distance >= threshold ? "Solte para atualizar" : "Puxe para atualizar";
+  }, { passive: false });
+
+  window.addEventListener("touchend", async () => {
+    if (!tracking || refreshing) return;
+    tracking = false;
+    if (distance < threshold) return reset();
+
+    refreshing = true;
+    indicator.setAttribute("aria-hidden", "false");
+    indicator.setAttribute("aria-busy", "true");
+    indicator.classList.add("refreshing");
+    indicator.classList.remove("ready");
+    indicator.style.setProperty("--pull-distance", "58px");
+    label.textContent = "Atualizando";
+    icon.textContent = "↻";
+    try {
+      await refreshCurrentPage();
+      toast("Página atualizada.");
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      refreshing = false;
+      indicator.classList.remove("refreshing");
+      reset();
+    }
+  }, { passive: true });
+
+  window.addEventListener("touchcancel", reset, { passive: true });
+}
+
+setupPullToRefresh();
 loadAgenda().catch(error => toast(error.message));
