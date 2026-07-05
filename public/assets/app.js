@@ -555,7 +555,7 @@ async function openOrder(appointmentId) {
     </div>`;
   }).join("")}</div>` : "";
   const financeEvents = [
-    ...data.movimentos.map(item => ({
+    ...data.movimentos.filter(item => !item.id_crediario).map(item => ({
       date: item.data_pagamento || item.data_movimento,
       title: item.tipo,
       detail: `${item.forma_pagamento || "Sem forma"}${item.observacao ? ` · ${item.observacao}` : ""}`,

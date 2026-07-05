@@ -237,7 +237,8 @@ async function openOrder(db, url) {
     WHERE ob.id_os=? ORDER BY obt.id
   `).bind(row.id_os).all();
   const { results: movements } = await db.prepare(`
-    SELECT id, tipo, valor, forma_pagamento, observacao, data_pagamento, data_movimento
+    SELECT id, id_crediario, tipo, valor, forma_pagamento, observacao,
+      data_pagamento, data_movimento
     FROM financeiro_movimentos WHERE id_financeiro=?
     ORDER BY COALESCE(data_pagamento,data_movimento) DESC, id DESC
   `).bind(row.id_financeiro).all();
