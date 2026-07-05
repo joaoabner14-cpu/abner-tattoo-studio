@@ -48,6 +48,7 @@ let activeOrderData = null;
 let clientSearchRequest = 0;
 let stockData = null;
 let managementData = null;
+let dashboardFinanceData = null;
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -82,11 +83,20 @@ async function showAgenda() {
 }
 
 async function loadFinance() {
-  const data = await api("/api/dashboard");
-  const html = `<div class="stats">
-    <div class="card stat"><span class="muted">Disponível hoje</span><strong>${money(data.resumo.receber_hoje)}</strong><small>Entradas disponíveis no caixa</small></div>
-    <div class="card stat"><span class="muted">Entrou no mês</span><strong>${money(data.resumo.receber_mes)}</strong><small>Total recebido neste mês</small></div>
-    <div class="card stat stat-late"><span class="muted">Crediário atrasado</span><strong>${money(data.resumo.atrasado)}</strong><small>Todos os pagamentos vencidos</small></div>
+  const currentMonth = todaySp().slice(0, 7);
+  const [data, monthly] = await Promise.all([
+    api("/api/dashboard"),
+    api(`/api/financeiro/gestao?mes=${currentMonth}&visao=mensal`)
+  ]);
+  dashboardFinanceData = monthly;
+  const summary = monthly.resumo;
+  const html = `<div class="stats home-finance-stats">
+    <button class="card stat income summary-card" data-home-summary="entradas"><span class="muted">Entradas</span><strong>${money(summary.entradas)}</strong></button>
+    <button class="card stat expense summary-card" data-home-summary="saidas"><span class="muted">Saídas</span><strong>${money(summary.saidas)}</strong></button>
+    <button class="card stat summary-card ${summary.resultado < 0 ? "stat-late" : ""}" data-home-summary="resultado"><span class="muted">Resultado</span><strong>${money(summary.resultado)}</strong></button>
+    <button class="card stat summary-card" data-home-summary="receber"><span class="muted">A receber</span><strong>${money(summary.receber)}</strong></button>
+    <button class="card stat summary-card" data-home-summary="pagar"><span class="muted">A pagar</span><strong>${money(summary.pagar)}</strong></button>
+    <button class="card stat stat-late summary-card" data-home-summary="atraso"><span class="muted">Em atraso</span><strong>${money(summary.atrasado)}</strong></button>
   </div><h2>Sinais pendentes</h2>${data.sinais_pendentes.map(x => `<div class="card card-head"><div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${money(x.valor)}</div></div><button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button></div>`).join("") || `<div class="card muted">Nenhum sinal pendente.</div>`}
   <h2>Parcelas atrasadas</h2>${data.parcelas_atrasadas.map(x => `<div class="card overdue-card">
     <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>
@@ -138,7 +148,7 @@ async function loadFinancialManagement(
     loadFinancialManagement(managementData.periodo, event.target.value);
 }
 
-function openSummaryDetails(kind) {
+function openSummaryDetails(kind, source = managementData) {
   const titles = {
     entradas: "Entradas", saidas: "Saídas", resultado: "Resultado",
     receber: "Valores a receber", pagar: "Valores a pagar", atraso: "Valores em atraso"
@@ -151,20 +161,20 @@ function openSummaryDetails(kind) {
     cashId: item.id,
     appointmentId: item.id_agendamento
   });
-  const cash = managementData.caixa || [];
+  const cash = source.caixa || [];
   let items = [];
   if (kind === "entradas") items = cash.filter(item => item.tipo === "Entrada").map(cashItem);
   if (kind === "saidas") items = cash.filter(item => item.tipo === "Saida").map(cashItem);
   if (kind === "resultado") items = cash.map(cashItem);
   if (kind === "receber") {
     items = [
-      ...(managementData.recebiveis_clientes || []).map(item => ({
+      ...(source.recebiveis_clientes || []).map(item => ({
         title: item.nome, detail: `OS #${item.id_os}`, value: item.saldo,
         appointmentId: item.id_agendamento
       })),
-      ...managementData.lancamentos.filter(item =>
+      ...source.lancamentos.filter(item =>
         item.tipo === "Receita" && item.status === "Pendente" &&
-        (managementData.visao === "geral" || item.competencia === managementData.periodo)
+        (source.visao === "geral" || item.competencia === source.periodo)
       ).map(item => ({
         title: item.descricao, detail: item.data_vencimento
           ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
@@ -173,9 +183,9 @@ function openSummaryDetails(kind) {
     ];
   }
   if (kind === "pagar") {
-    items = managementData.lancamentos.filter(item =>
+    items = source.lancamentos.filter(item =>
       ["Despesa", "DAS"].includes(item.tipo) && item.status === "Pendente" &&
-      (managementData.visao === "geral" || item.competencia === managementData.periodo)
+      (source.visao === "geral" || item.competencia === source.periodo)
     ).map(item => ({
       title: item.descricao, detail: item.data_vencimento
         ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
@@ -184,14 +194,14 @@ function openSummaryDetails(kind) {
   }
   if (kind === "atraso") {
     items = [
-      ...managementData.lancamentos.filter(item =>
+      ...source.lancamentos.filter(item =>
         item.status === "Pendente" && item.data_vencimento &&
         item.data_vencimento < todaySp()
       ).map(item => ({
         title: item.descricao, detail: `Venceu ${dateBr(item.data_vencimento)}`,
         value: item.valor, launchId: item.id
       })),
-      ...(managementData.crediarios_atrasados || []).map(item => ({
+      ...(source.crediarios_atrasados || []).map(item => ({
         title: item.nome, detail: `OS #${item.id_os} · venceu ${dateBr(item.data_vencimento)}`,
         value: item.valor, appointmentId: item.id_agendamento
       }))
@@ -748,6 +758,10 @@ document.addEventListener("click", event => {
   if (managementPayment) openManagementPayment(managementPayment);
   const summary = event.target.closest("[data-summary]");
   if (summary) openSummaryDetails(summary.dataset.summary);
+  const homeSummary = event.target.closest("[data-home-summary]");
+  if (homeSummary && dashboardFinanceData) {
+    openSummaryDetails(homeSummary.dataset.homeSummary, dashboardFinanceData);
+  }
   const summaryOrder = event.target.closest(".open-summary-order");
   if (summaryOrder) {
     $("#actionDialog").close();
@@ -759,7 +773,7 @@ document.addEventListener("click", event => {
       .then(async () => {
         $("#actionDialog").close();
         toast("Lançamento cancelado.");
-        await loadFinancialManagement(managementData.periodo);
+        if (managementData) await loadFinancialManagement(managementData.periodo);
         await loadFinance();
       }).catch(error => toast(error.message));
   }
@@ -769,7 +783,8 @@ document.addEventListener("click", event => {
       .then(async () => {
         $("#actionDialog").close();
         toast("Lançamento cancelado.");
-        await loadFinancialManagement(managementData.periodo);
+        if (managementData) await loadFinancialManagement(managementData.periodo);
+        await loadFinance();
       }).catch(error => toast(error.message));
   }
   const installment = event.target.closest(".pay-installment");

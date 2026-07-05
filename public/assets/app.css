@@ -82,3 +82,5 @@
 
 .management-period{gap:10px}
 @media(max-width:800px){.management-period{flex-direction:column}}
+.home-finance-stats .income strong{color:var(--green)}.home-finance-stats .expense strong{color:var(--red)}
+@media(max-width:800px){.home-finance-stats{grid-template-columns:1fr 1fr;gap:8px}.home-finance-stats .stat{padding:14px}.home-finance-stats .stat strong{font-size:20px}}
