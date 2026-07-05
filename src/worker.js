@@ -618,11 +618,11 @@ async function dashboard(db) {
     ORDER BY cr.data_vencimento
   `).all();
   const late = installments.filter(x => x.vencimento < today);
-  const cash = await db.prepare(`
-    SELECT
-      COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,10)=? THEN valor ELSE 0 END),0) hoje,
-      COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,7)=? THEN valor ELSE 0 END),0) mes
-    FROM caixa
+    const cash = await db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,10)=? THEN valor ELSE 0 END),0) hoje,
+        COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,7)=? THEN valor ELSE 0 END),0) mes
+      FROM caixa WHERE status='Ativo'
   `).bind(today, month).first();
   return json({
     resumo: {
@@ -788,16 +788,73 @@ async function financialManagement(db, request, url) {
   const today = saoPauloDate();
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("mes") || "")
     ? url.searchParams.get("mes") : today.slice(0, 7);
+  const cashCancellation = url.pathname.match(/^\/api\/financeiro\/caixa\/(\d+)\/cancelar$/);
+  if (request.method === "POST" && cashCancellation) {
+    const cashId = integer(cashCancellation[1]);
+    const entry = await db.prepare("SELECT * FROM caixa WHERE id=?").bind(cashId).first();
+    if (!entry) return error("Lançamento não encontrado.", 404);
+    if (entry.status === "Cancelado") return error("Este lançamento já foi cancelado.");
+    const statements = [
+      db.prepare("UPDATE caixa SET status='Cancelado' WHERE id=?").bind(cashId)
+    ];
+    if (entry.id_lancamento) {
+      statements.push(db.prepare(
+        "UPDATE gestao_financeira SET status='Cancelado' WHERE id=?"
+      ).bind(entry.id_lancamento));
+    }
+    if (entry.tipo === "Entrada" && entry.id_financeiro) {
+      const movement = await db.prepare(`
+        SELECT id,id_crediario FROM financeiro_movimentos
+        WHERE id_financeiro=? AND tipo IN ('Sinal','Pagamento')
+          AND valor=? AND COALESCE(data_pagamento,substr(data_movimento,1,10))=?
+        ORDER BY id DESC LIMIT 1
+      `).bind(entry.id_financeiro, entry.valor, entry.data_movimento.slice(0, 10)).first();
+      statements.push(
+        db.prepare(`
+          INSERT INTO financeiro_movimentos
+            (id_financeiro,tipo,valor,forma_pagamento,observacao,data_pagamento)
+          VALUES(?,'Estorno',?,?,?,?)
+        `).bind(entry.id_financeiro, entry.valor, entry.forma_pagamento,
+          `Cancelamento do lançamento #${cashId}`, today),
+        db.prepare("UPDATE financeiro SET status='Pendente' WHERE id=?")
+          .bind(entry.id_financeiro)
+      );
+      if (entry.categoria === "Sinal") {
+        statements.push(db.prepare(`
+          UPDATE financeiro SET sinal_pago=0,data_pagamento_sinal=NULL WHERE id=?
+        `).bind(entry.id_financeiro));
+      }
+      if (movement?.id_crediario) {
+        statements.push(db.prepare(`
+          UPDATE crediario SET status='Pendente',data_pagamento=NULL WHERE id=?
+        `).bind(movement.id_crediario));
+      }
+    }
+    await db.batch(statements);
+    return json({ ok: true });
+  }
+  const launchCancellation = url.pathname.match(/^\/api\/financeiro\/gestao\/(\d+)\/cancelar$/);
+  if (request.method === "POST" && launchCancellation) {
+    const launchId = integer(launchCancellation[1]);
+    const launch = await db.prepare("SELECT status FROM gestao_financeira WHERE id=?")
+      .bind(launchId).first();
+    if (!launch) return error("Lançamento não encontrado.", 404);
+    if (launch.status === "Cancelado") return error("Este lançamento já foi cancelado.");
+    await db.prepare("UPDATE gestao_financeira SET status='Cancelado' WHERE id=?")
+      .bind(launchId).run();
+    return json({ ok: true });
+  }
   if (request.method === "GET" && url.pathname === "/api/financeiro/gestao") {
     const cash = await db.prepare(`
       SELECT
         COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
         COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
-      FROM caixa WHERE substr(data_movimento,1,7)=?
+      FROM caixa WHERE substr(data_movimento,1,7)=? AND status='Ativo'
     `).bind(month).first();
     const annual = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) faturamento
       FROM caixa WHERE tipo='Entrada' AND substr(data_movimento,1,4)=?
+        AND status='Ativo'
     `).bind(month.slice(0, 4)).first();
     const payable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
@@ -817,6 +874,19 @@ async function financialManagement(db, request, url) {
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
       WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
     `).first();
+    const { results: clientReceivables } = await db.prepare(`
+      SELECT f.id id_financeiro,f.id_os,a.id id_agendamento,c.nome,
+        f.valor_final,
+        COALESCE((SELECT SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
+          WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
+          FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago
+      FROM financeiro f
+      JOIN clientes c ON c.id=f.id_cliente
+      LEFT JOIN ordem_servico os ON os.id=f.id_os
+      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+      WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
+      ORDER BY COALESCE(a.data_hora,f.data_criacao)
+    `).all();
     const overdueBills = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE status='Pendente' AND data_vencimento<?
@@ -830,6 +900,18 @@ async function financialManagement(db, request, url) {
       WHERE cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
         AND (a.id IS NULL OR a.status<>'Cancelado')
     `).bind(today).first();
+    const { results: overdueCredits } = await db.prepare(`
+      SELECT cr.id,cr.numero_parcela,cr.valor_parcela valor,cr.data_vencimento,
+        c.nome,f.id_os,a.id id_agendamento
+      FROM crediario cr
+      JOIN financeiro f ON f.id=cr.id_financeiro
+      JOIN clientes c ON c.id=f.id_cliente
+      LEFT JOIN ordem_servico os ON os.id=f.id_os
+      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+      WHERE cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
+        AND (a.id IS NULL OR a.status<>'Cancelado')
+      ORDER BY cr.data_vencimento
+    `).bind(today).all();
     const { results: launches } = await db.prepare(`
       SELECT * FROM gestao_financeira
       WHERE status='Pendente' OR competencia=?
@@ -838,9 +920,10 @@ async function financialManagement(db, request, url) {
     `).bind(month).all();
     const { results: cashHistory } = await db.prepare(`
       SELECT cx.id,cx.data_movimento,cx.tipo,cx.categoria,cx.descricao,cx.valor,
-        cx.forma_pagamento,c.nome cliente,cx.id_os
+        cx.forma_pagamento,c.nome cliente,cx.id_os,os.id_agendamento
       FROM caixa cx LEFT JOIN clientes c ON c.id=cx.id_cliente
-      WHERE substr(cx.data_movimento,1,7)=?
+      LEFT JOIN ordem_servico os ON os.id=cx.id_os
+      WHERE substr(cx.data_movimento,1,7)=? AND cx.status='Ativo'
       ORDER BY cx.data_movimento DESC,cx.id DESC LIMIT 150
     `).bind(month).all();
     const { results: expenseCategories } = await db.prepare(`
@@ -850,7 +933,7 @@ async function financialManagement(db, request, url) {
     `).bind(month).all();
     const { results: monthlyRevenue } = await db.prepare(`
       SELECT substr(data_movimento,1,7) mes,SUM(valor) total FROM caixa
-      WHERE tipo='Entrada' AND substr(data_movimento,1,4)=?
+      WHERE tipo='Entrada' AND substr(data_movimento,1,4)=? AND status='Ativo'
       GROUP BY mes ORDER BY mes
     `).bind(month.slice(0, 4)).all();
     return json({
@@ -865,6 +948,10 @@ async function financialManagement(db, request, url) {
         limite_mei: 81000
       },
       lancamentos: launches, caixa: cashHistory,
+      recebiveis_clientes: clientReceivables
+        .map(item => ({ ...item, saldo: Math.max(0, item.valor_final - item.pago) }))
+        .filter(item => item.saldo > 0),
+      crediarios_atrasados: overdueCredits,
       despesas_categoria: expenseCategories, faturamento_mensal: monthlyRevenue
     });
   }
@@ -1226,7 +1313,7 @@ async function api(request, env, url) {
   if (clientResponse) return clientResponse;
   const stockResponse = await stock(db, request, url);
   if (stockResponse) return stockResponse;
-  if (url.pathname.startsWith("/api/financeiro/gestao")) {
+  if (url.pathname.startsWith("/api/financeiro/")) {
     const managementResponse = await financialManagement(db, request, url);
     if (managementResponse) return managementResponse;
   }

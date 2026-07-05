@@ -112,12 +112,12 @@ async function loadFinancialManagement(month = todaySp().slice(0, 7)) {
   const categories = managementData.despesas_categoria.map(item => `<div class="category-row"><span>${escapeHtml(item.categoria)}</span><strong>${money(item.total)}</strong></div>`).join("") || `<p class="muted">Nenhuma despesa paga no período.</p>`;
   $("#fullFinancePanel").innerHTML = `<div class="management-period"><label>Período<input id="financeMonth" type="month" value="${managementData.periodo}"></label></div>
     <div class="management-stats">
-      <div class="card stat income"><span class="muted">Entradas</span><strong>${money(summary.entradas)}</strong></div>
-      <div class="card stat expense"><span class="muted">Saídas</span><strong>${money(summary.saidas)}</strong></div>
-      <div class="card stat ${summary.resultado < 0 ? "stat-late" : ""}"><span class="muted">Resultado</span><strong>${money(summary.resultado)}</strong></div>
-      <div class="card stat"><span class="muted">A receber</span><strong>${money(summary.receber)}</strong></div>
-      <div class="card stat"><span class="muted">A pagar</span><strong>${money(summary.pagar)}</strong></div>
-      <div class="card stat stat-late"><span class="muted">Em atraso</span><strong>${money(summary.atrasado)}</strong></div>
+      <button class="card stat income summary-card" data-summary="entradas"><span class="muted">Entradas</span><strong>${money(summary.entradas)}</strong></button>
+      <button class="card stat expense summary-card" data-summary="saidas"><span class="muted">Saídas</span><strong>${money(summary.saidas)}</strong></button>
+      <button class="card stat summary-card ${summary.resultado < 0 ? "stat-late" : ""}" data-summary="resultado"><span class="muted">Resultado</span><strong>${money(summary.resultado)}</strong></button>
+      <button class="card stat summary-card" data-summary="receber"><span class="muted">A receber</span><strong>${money(summary.receber)}</strong></button>
+      <button class="card stat summary-card" data-summary="pagar"><span class="muted">A pagar</span><strong>${money(summary.pagar)}</strong></button>
+      <button class="card stat stat-late summary-card" data-summary="atraso"><span class="muted">Em atraso</span><strong>${money(summary.atrasado)}</strong></button>
     </div>
     <section class="card mei-card"><div class="card-head"><div><span class="eyebrow">MEI 2026</span><h2>Faturamento anual</h2></div><strong>${money(summary.faturamento_anual)} / ${money(summary.limite_mei)}</strong></div>
       <div class="mei-progress"><span style="width:${limitPercent}%"></span></div><small class="muted">${limitPercent.toFixed(1).replace(".", ",")}% do limite anual. Receitas a prazo devem ser conferidas pelo mês da prestação para o relatório oficial.</small></section>
@@ -127,6 +127,77 @@ async function loadFinancialManagement(month = todaySp().slice(0, 7)) {
     <h2>Fluxo de caixa do mês</h2><div class="management-history">${cash}</div>
     <p class="management-note">Controle gerencial. Confira o Relatório Mensal de Receitas Brutas e a DASN-SIMEI nos canais oficiais do MEI.</p>`;
   $("#financeMonth").onchange = event => loadFinancialManagement(event.target.value);
+}
+
+function openSummaryDetails(kind) {
+  const titles = {
+    entradas: "Entradas", saidas: "Saídas", resultado: "Resultado",
+    receber: "Valores a receber", pagar: "Valores a pagar", atraso: "Valores em atraso"
+  };
+  const cashItem = item => ({
+    title: item.descricao || item.categoria,
+    detail: `${dateBr(item.data_movimento)}${item.cliente ? ` · ${item.cliente}` : ""}`,
+    value: item.valor,
+    sign: item.tipo === "Saida" ? -1 : 1,
+    cashId: item.id,
+    appointmentId: item.id_agendamento
+  });
+  const cash = managementData.caixa || [];
+  let items = [];
+  if (kind === "entradas") items = cash.filter(item => item.tipo === "Entrada").map(cashItem);
+  if (kind === "saidas") items = cash.filter(item => item.tipo === "Saida").map(cashItem);
+  if (kind === "resultado") items = cash.map(cashItem);
+  if (kind === "receber") {
+    items = [
+      ...(managementData.recebiveis_clientes || []).map(item => ({
+        title: item.nome, detail: `OS #${item.id_os}`, value: item.saldo,
+        appointmentId: item.id_agendamento
+      })),
+      ...managementData.lancamentos.filter(item =>
+        item.tipo === "Receita" && item.status === "Pendente"
+      ).map(item => ({
+        title: item.descricao, detail: item.data_vencimento
+          ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
+        value: item.valor, launchId: item.id
+      }))
+    ];
+  }
+  if (kind === "pagar") {
+    items = managementData.lancamentos.filter(item =>
+      ["Despesa", "DAS"].includes(item.tipo) && item.status === "Pendente"
+    ).map(item => ({
+      title: item.descricao, detail: item.data_vencimento
+        ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
+      value: item.valor, launchId: item.id
+    }));
+  }
+  if (kind === "atraso") {
+    items = [
+      ...managementData.lancamentos.filter(item =>
+        item.status === "Pendente" && item.data_vencimento &&
+        item.data_vencimento < todaySp()
+      ).map(item => ({
+        title: item.descricao, detail: `Venceu ${dateBr(item.data_vencimento)}`,
+        value: item.valor, launchId: item.id
+      })),
+      ...(managementData.crediarios_atrasados || []).map(item => ({
+        title: item.nome, detail: `OS #${item.id_os} · venceu ${dateBr(item.data_vencimento)}`,
+        value: item.valor, appointmentId: item.id_agendamento
+      }))
+    ];
+  }
+  const rows = items.map(item => `<article class="summary-detail-item">
+    <div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.detail || "")}</small></div>
+    <strong class="${item.sign < 0 ? "negative" : ""}">${item.sign < 0 ? "- " : ""}${money(item.value)}</strong>
+    <div class="summary-detail-actions">
+      ${item.appointmentId ? `<button class="secondary open-summary-order" data-id="${item.appointmentId}">Abrir OS</button>` : ""}
+      ${item.cashId ? `<button class="danger cancel-cash-entry" data-id="${item.cashId}">Cancelar lançamento</button>` : ""}
+      ${item.launchId ? `<button class="danger cancel-management-entry" data-id="${item.launchId}">Cancelar lançamento</button>` : ""}
+    </div>
+  </article>`).join("") || `<div class="card muted">Nenhum lançamento neste painel.</div>`;
+  $("#actionContent").innerHTML = `<header><h2>${titles[kind]}</h2><button class="close" type="button">×</button></header>
+    <div class="summary-detail-list">${rows}</div>`;
+  $("#actionDialog").showModal();
 }
 
 function nextMonthDueDay20() {
@@ -664,6 +735,32 @@ document.addEventListener("click", event => {
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
   const managementPayment = event.target.closest(".pay-management");
   if (managementPayment) openManagementPayment(managementPayment);
+  const summary = event.target.closest("[data-summary]");
+  if (summary) openSummaryDetails(summary.dataset.summary);
+  const summaryOrder = event.target.closest(".open-summary-order");
+  if (summaryOrder) {
+    $("#actionDialog").close();
+    openOrder(summaryOrder.dataset.id, "os-finance");
+  }
+  const cashCancellation = event.target.closest(".cancel-cash-entry");
+  if (cashCancellation && confirm("Cancelar este lançamento financeiro?")) {
+    post(`/api/financeiro/caixa/${cashCancellation.dataset.id}/cancelar`)
+      .then(async () => {
+        $("#actionDialog").close();
+        toast("Lançamento cancelado.");
+        await loadFinancialManagement(managementData.periodo);
+        await loadFinance();
+      }).catch(error => toast(error.message));
+  }
+  const managementCancellation = event.target.closest(".cancel-management-entry");
+  if (managementCancellation && confirm("Cancelar este lançamento financeiro?")) {
+    post(`/api/financeiro/gestao/${managementCancellation.dataset.id}/cancelar`)
+      .then(async () => {
+        $("#actionDialog").close();
+        toast("Lançamento cancelado.");
+        await loadFinancialManagement(managementData.periodo);
+      }).catch(error => toast(error.message));
+  }
   const installment = event.target.closest(".pay-installment");
   if (installment) openInstallmentPayment(installment);
   const material = event.target.closest(".remove-material");
