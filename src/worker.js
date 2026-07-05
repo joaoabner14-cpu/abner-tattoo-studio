@@ -87,8 +87,40 @@ async function listAppointments(db, url) {
     ORDER BY a.data_hora
   `).all();
   if (url.searchParams.get("tipo") !== "lista") {
-    return json(results.filter(x => x.status.toLowerCase() !== "cancelado")
-      .map(x => ({ id: x.id, title: x.nome, start: x.data_hora.replace(" ", "T") })));
+    const { results: installments } = await db.prepare(`
+      SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.valor_parcela,
+        c.nome, a.id id_agendamento
+      FROM crediario cr
+      JOIN financeiro f ON f.id=cr.id_financeiro
+      JOIN clientes c ON c.id=f.id_cliente
+      LEFT JOIN ordem_servico os ON os.id=f.id_os
+      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+      WHERE cr.status IN ('Pendente','Atrasado')
+      ORDER BY cr.data_vencimento, cr.numero_parcela
+    `).all();
+    const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
+      .map(x => ({
+        id: `agendamento-${x.id}`,
+        title: x.nome,
+        start: x.data_hora.replace(" ", "T"),
+        extendedProps: { tipo: "agendamento", id_agendamento: x.id }
+      }));
+    const payments = installments.map(x => ({
+      id: `crediario-${x.id}`,
+      title: `Crediário · ${x.nome} · Parcela ${x.numero_parcela}`,
+      start: x.data_vencimento,
+      allDay: true,
+      backgroundColor: "#36b37e",
+      borderColor: "#36b37e",
+      textColor: "#111214",
+      extendedProps: {
+        tipo: "crediario",
+        id_agendamento: x.id_agendamento,
+        valor: x.valor_parcela,
+        parcela: x.numero_parcela
+      }
+    }));
+    return json([...appointments, ...payments]);
   }
   const today = saoPauloDate();
   const tomorrow = saoPauloDate(1);

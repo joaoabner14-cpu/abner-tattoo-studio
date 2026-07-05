@@ -54,7 +54,11 @@ async function loadAgenda() {
       locale: "pt-br", initialView: "dayGridMonth", height: "auto",
       events: "/api/agendamentos",
       dateClick: info => openAppointment(info.dateStr),
-      eventClick: info => openOrder(info.event.id)
+      eventClick: info => {
+        const { tipo, id_agendamento: appointmentId } = info.event.extendedProps;
+        if (!appointmentId) return;
+        openOrder(appointmentId, tipo === "crediario" ? "os-finance" : "os-data");
+      }
     });
     calendar.render();
   } else calendar.refetchEvents();
@@ -430,6 +434,7 @@ function openFinanceAction(action, defaults = {}, returnToOrder = true) {
     const path = action === "payment" ? "/api/movimentos" : action === "credit" ? "/api/crediario" : "/api/ajustes";
     await send(path, "POST", event.currentTarget);
     toast(defaults.tipo === "Sinal" ? "Sinal recebido." : action === "payment" ? "Pagamento registrado." : action === "credit" ? "Crediário criado." : "Ajuste registrado.");
+    if (action === "credit") calendar?.refetchEvents();
     if (returnToOrder) await refreshOrder();
     else {
       $("#actionDialog").close();
@@ -522,6 +527,7 @@ function openInstallmentPayment(trigger) {
       Object.fromEntries(new FormData(event.currentTarget)));
     $("#actionDialog").close();
     toast("Parcela recebida.");
+    calendar?.refetchEvents();
     if (orderWasOpen) await refreshOrder();
     else {
       if (selectedClientId) {
@@ -533,7 +539,7 @@ function openInstallmentPayment(trigger) {
   };
 }
 
-async function openOrder(appointmentId) {
+async function openOrder(appointmentId, initialTab = "os-data") {
   const data = await api(`/api/os?id=${appointmentId}`);
   activeOrderData = data;
   const [date, time] = data.data_hora.split(" ");
@@ -608,6 +614,7 @@ async function openOrder(appointmentId) {
       ${installmentHtml ? `<h2>Parcelas</h2>${installmentHtml}` : ""}
       <h2>Histórico financeiro</h2><div class="finance-history">${financeHistory}</div></div>`;
   $("#orderDialog").showModal();
+  $(`[data-tab=${initialTab}]`, $("#orderDialog"))?.click();
   $("#scheduleForm").onsubmit = async e => { e.preventDefault(); await send(`/api/agendamentos/${data.id_agendamento}`, "PUT", e.currentTarget); toast("Agendamento atualizado."); $("#orderDialog").close(); loadAgenda(); };
 }
 
