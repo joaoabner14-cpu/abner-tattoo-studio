@@ -131,7 +131,9 @@ async function listAppointments(db, url) {
   const today = saoPauloDate();
   const tomorrow = saoPauloDate(1);
   const grouped = {};
-  for (const row of results.filter(x => x.data_hora.slice(0, 10) >= today)) {
+  for (const row of results.filter(x =>
+    x.data_hora.slice(0, 10) >= today && x.status.toLowerCase() !== "cancelado"
+  )) {
     const date = row.data_hora.slice(0, 10);
     const phone = row.telefone.replace(/\D/g, "");
     const message = encodeURIComponent(
