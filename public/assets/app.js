@@ -819,19 +819,6 @@ $("#loginForm").onsubmit = async event => {
   }
 };
 
-$("#passkeyLogin").onclick = async () => {
-  $("#loginError").textContent = "";
-  try {
-    const optionsJSON = await post("/api/auth/passkey/options");
-    const response = await window.SimpleWebAuthnBrowser.startAuthentication({ optionsJSON });
-    await post("/api/auth/passkey/verify", response);
-    await startApplication();
-  } catch (error) {
-    $("#loginError").textContent = error.name === "NotAllowedError"
-      ? "Autenticação cancelada." : error.message;
-  }
-};
-
 $("#enablePasskey").onclick = async () => {
   $("#sidebar").classList.remove("open");
   if (!window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn()) {
