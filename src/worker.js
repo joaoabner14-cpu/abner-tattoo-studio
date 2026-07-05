@@ -1,10 +1,3 @@
-import {
-  generateAuthenticationOptions,
-  generateRegistrationOptions,
-  verifyAuthenticationResponse,
-  verifyRegistrationResponse
-} from "@simplewebauthn/server";
-
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
@@ -1172,11 +1165,8 @@ async function authApi(db, request, url) {
   const user = await currentUser(db, request);
   if (path === "/api/auth/me" && request.method === "GET") {
     if (!user) return authResponse({ authenticated: false }, 401);
-    const credential = await db.prepare(
-      "SELECT COUNT(*) total FROM webauthn_credenciais WHERE id_usuario=?"
-    ).bind(user.id).first();
     return authResponse({ authenticated: true, user: {
-      id: user.id, login: user.login, nome: user.nome, passkey: credential.total > 0
+      id: user.id, login: user.login, nome: user.nome
     } });
   }
   if (path === "/api/auth/login" && request.method === "POST") {
@@ -1210,6 +1200,9 @@ async function authApi(db, request, url) {
     const secure = url.protocol === "https:" ? "; Secure" : "";
     return authResponse({ ok: true }, 200,
       `studio_session=; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=0`);
+  }
+  if (path.startsWith("/api/auth/passkey")) {
+    return authResponse({ error: "Rota de autenticação não encontrada." }, 404);
   }
   if (path === "/api/auth/passkey/register/options" && request.method === "POST") {
     if (!user) return authResponse({ error: "Não autorizado." }, 401);

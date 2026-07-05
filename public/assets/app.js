@@ -883,7 +883,7 @@ function setupPullToRefresh() {
 let applicationStarted = false;
 
 function showLogin() {
-  document.body.classList.add("auth-loading");
+  document.body.classList.remove("auth-loading");
   document.body.classList.remove("authenticated");
   applicationStarted = false;
 }
