@@ -482,6 +482,26 @@ function openNewClient() {
   };
 }
 
+async function openProfile() {
+  const profile = await api("/api/perfil");
+  $("#actionContent").innerHTML = `<header><h2>Perfil e estúdio</h2><button class="close" type="button">×</button></header>
+    <form id="profileForm">
+      <label>Seu nome<input name="nome" value="${escapeHtml(profile.nome)}" required></label>
+      <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(profile.nome_estudio)}" required></label>
+      <label>Endereço<input name="endereco" value="${escapeHtml(profile.endereco)}"></label>
+      <label>CNPJ<input name="cnpj" inputmode="numeric" value="${escapeHtml(profile.cnpj)}"></label>
+      <label>Instagram<input name="instagram" placeholder="@usuario" value="${escapeHtml(profile.instagram)}"></label>
+      <button class="primary">Salvar informações</button>
+    </form>`;
+  $("#actionDialog").showModal();
+  $("#profileForm").onsubmit = async event => {
+    event.preventDefault();
+    await send("/api/perfil", "PUT", event.currentTarget);
+    $("#actionDialog").close();
+    toast("Perfil atualizado.");
+  };
+}
+
 async function refreshOrder(tab = "os-finance") {
   const appointmentId = activeOrderData.id_agendamento;
   if ($("#actionDialog").open) $("#actionDialog").close();
@@ -812,6 +832,7 @@ document.addEventListener("click", event => {
   const tab = event.target.closest(".tab"); if (tab) { const root = tab.closest("dialog") || $("#clientDetail"); $$(".tab,.tab-pane", root).forEach(x => x.classList.remove("active")); tab.classList.add("active"); $(`#${tab.dataset.tab}`, root).classList.add("active"); }
 });
 $("#menuButton").onclick = () => $("#sidebar").classList.toggle("open");
+$("#accountButton").onclick = () => openProfile().catch(error => toast(error.message));
 $("#clientSearch").oninput = event => loadClients(event.target.value);
 $("#appointmentForm").onsubmit = async event => {
   event.preventDefault(); await send("/api/agendamentos", "POST", event.currentTarget);

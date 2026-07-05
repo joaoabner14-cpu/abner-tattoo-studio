@@ -1311,6 +1311,30 @@ async function authApi(db, request, url) {
 
 async function api(request, env, url) {
   const db = env.DB;
+  if (url.pathname === "/api/perfil") {
+    const user = await currentUser(db, request);
+    if (!user) return error("Não autorizado.", 401);
+    if (request.method === "GET") {
+      const studio = await db.prepare("SELECT * FROM perfil_estudio WHERE id=1").first();
+      return json({ nome: user.nome, ...(studio || {}) });
+    }
+    if (request.method === "PUT") {
+      const data = await body(request);
+      await db.batch([
+        db.prepare("UPDATE usuarios SET nome=? WHERE id=?")
+          .bind(required(data.nome, "nome"), user.id),
+        db.prepare(`
+          INSERT INTO perfil_estudio(id,nome_estudio,endereco,cnpj,instagram,data_atualizacao)
+          VALUES(1,?,?,?,?,CURRENT_TIMESTAMP)
+          ON CONFLICT(id) DO UPDATE SET nome_estudio=excluded.nome_estudio,
+            endereco=excluded.endereco,cnpj=excluded.cnpj,
+            instagram=excluded.instagram,data_atualizacao=CURRENT_TIMESTAMP
+        `).bind(required(data.nome_estudio, "nome do estúdio"), data.endereco || "",
+          String(data.cnpj || "").replace(/\D/g, ""), data.instagram || "")
+      ]);
+      return json({ ok: true });
+    }
+  }
   const clientResponse = await clients(db, request, url);
   if (clientResponse) return clientResponse;
   const stockResponse = await stock(db, request, url);
