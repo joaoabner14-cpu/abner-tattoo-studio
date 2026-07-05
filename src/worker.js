@@ -98,6 +98,7 @@ async function listAppointments(db, url) {
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
       WHERE cr.status IN ('Pendente','Atrasado')
+        AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento, cr.numero_parcela
     `).all();
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
@@ -612,7 +613,9 @@ async function dashboard(db) {
     JOIN clientes c ON c.id=f.id_cliente
     LEFT JOIN ordem_servico os ON os.id=f.id_os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-    WHERE cr.status IN ('Pendente','Atrasado') ORDER BY cr.data_vencimento
+    WHERE cr.status IN ('Pendente','Atrasado')
+      AND (a.id IS NULL OR a.status<>'Cancelado')
+    ORDER BY cr.data_vencimento
   `).all();
   const late = installments.filter(x => x.vencimento < today);
   const cash = await db.prepare(`
@@ -809,15 +812,23 @@ async function financialManagement(db, request, url) {
         SELECT SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
           WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
         FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0))),0) total
-      FROM financeiro f WHERE f.status<>'Cancelado'
+      FROM financeiro f
+      LEFT JOIN ordem_servico os ON os.id=f.id_os
+      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+      WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
     `).first();
     const overdueBills = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE status='Pendente' AND data_vencimento<?
     `).bind(today).first();
     const overdueCredit = await db.prepare(`
-      SELECT COALESCE(SUM(valor_parcela),0) total FROM crediario
-      WHERE status IN ('Pendente','Atrasado') AND data_vencimento<?
+      SELECT COALESCE(SUM(cr.valor_parcela),0) total
+      FROM crediario cr
+      JOIN financeiro f ON f.id=cr.id_financeiro
+      LEFT JOIN ordem_servico os ON os.id=f.id_os
+      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+      WHERE cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
+        AND (a.id IS NULL OR a.status<>'Cancelado')
     `).bind(today).first();
     const { results: launches } = await db.prepare(`
       SELECT * FROM gestao_financeira
@@ -928,7 +939,10 @@ async function clientSummary(db, url) {
         FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id)),0) pago,
       COALESCE(SUM((SELECT SUM(CASE WHEN fm.tipo='Estorno' THEN fm.valor ELSE 0 END)
         FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id)),0) estornado
-      FROM financeiro f WHERE f.id_cliente=?
+      FROM financeiro f
+      LEFT JOIN ordem_servico os ON os.id=f.id_os
+      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+      WHERE f.id_cliente=? AND (a.id IS NULL OR a.status<>'Cancelado')
     `).bind(id).first();
     const { results: orders } = await db.prepare(`
       SELECT f.id id_financeiro, f.id_os, a.id id_agendamento, a.data_hora,
@@ -940,7 +954,8 @@ async function clientSummary(db, url) {
           WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')),0) parcelado
       FROM financeiro f LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE f.id_cliente=? ORDER BY COALESCE(a.data_hora,f.data_criacao) DESC
+      WHERE f.id_cliente=? AND (a.id IS NULL OR a.status<>'Cancelado')
+      ORDER BY COALESCE(a.data_hora,f.data_criacao) DESC
     `).bind(id).all();
     const { results: movements } = await db.prepare(`
       SELECT fm.id, fm.tipo, fm.valor, fm.forma_pagamento, fm.data_pagamento,
@@ -958,6 +973,7 @@ async function clientSummary(db, url) {
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
       WHERE f.id_cliente=? AND cr.status<>'Cancelado'
+        AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento DESC
     `).bind(id).all();
     const { results: adjustments } = await db.prepare(`
