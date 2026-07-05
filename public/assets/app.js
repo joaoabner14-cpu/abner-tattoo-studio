@@ -62,6 +62,7 @@ let profileCrop = null;
 let marketingData = [];
 let marketingArtData = "";
 let marketingOpportunities = [];
+let notificationsData = [];
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -70,6 +71,10 @@ async function loadAgenda() {
       dateClick: info => openAppointment(info.dateStr),
       eventClick: info => {
         const { tipo, id_agendamento: appointmentId } = info.event.extendedProps;
+        if (tipo === "marketing") {
+          openMarketingRecord(info.event.extendedProps.id_marketing);
+          return;
+        }
         if (!appointmentId) return;
         openOrder(appointmentId, tipo === "crediario" ? "os-finance" : "os-data");
       }
@@ -395,6 +400,29 @@ async function loadMarketing() {
   $("#marketingStatus").onchange = loadMarketing;
 }
 
+async function openMarketingRecord(id) {
+  $(`.nav-link[data-page="marketing"]`)?.click();
+  await loadMarketing();
+  openMarketingPlan(id);
+}
+
+async function loadNotifications() {
+  notificationsData = await api("/api/notificacoes");
+  const badge = $("#notificationBadge");
+  badge.textContent = notificationsData.length;
+  badge.hidden = notificationsData.length === 0;
+}
+
+function openNotifications() {
+  const rows = notificationsData.map(item => `<button class="notification-item" type="button" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
+    <span class="notification-icon">${item.dias < 0 ? "!" : item.tipo === "oportunidade" ? "★" : "•"}</span>
+    <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} · ${dateBr(item.data)}</small></span>
+  </button>`).join("") || `<div class="card muted">Nenhuma notificação de marketing.</div>`;
+  $("#actionContent").innerHTML = `<header><h2>Notificações</h2><button class="close" type="button">×</button></header>
+    <div class="notification-list">${rows}</div>`;
+  $("#actionDialog").showModal();
+}
+
 function openMarketingPlan(itemId = "") {
   const item = marketingData.find(entry => String(entry.id) === String(itemId)) || {};
   marketingArtData = "";
@@ -474,6 +502,8 @@ function openMarketingPlan(itemId = "") {
     $("#actionDialog").close();
     toast("Planejamento salvo.");
     await loadMarketing();
+    await loadNotifications();
+    calendar?.refetchEvents();
   };
 }
 
@@ -1090,12 +1120,14 @@ document.addEventListener("click", event => {
       .then(() => {
         toast("Planejamento removido. A oportunidade está livre para recomeçar.");
         loadMarketing();
+        loadNotifications();
+        calendar?.refetchEvents();
       }).catch(error => toast(error.message));
   }
   const marketingDelete = event.target.closest(".delete-marketing");
   if (marketingDelete && confirm("Excluir este planejamento?")) {
     api(`/api/marketing/${marketingDelete.dataset.id}`, { method: "DELETE" })
-      .then(() => { toast("Planejamento excluído."); loadMarketing(); })
+      .then(() => { toast("Planejamento excluído."); loadMarketing(); loadNotifications(); calendar?.refetchEvents(); })
       .catch(error => toast(error.message));
   }
   const marketingCopy = event.target.closest(".copy-marketing-caption");
@@ -1104,6 +1136,15 @@ document.addEventListener("click", event => {
     navigator.clipboard.writeText(item?.texto_postagem || "")
       .then(() => toast("Legenda copiada."))
       .catch(() => toast("Não foi possível copiar a legenda."));
+  }
+  const notification = event.target.closest(".notification-item");
+  if (notification) {
+    $("#actionDialog").close();
+    if (notification.dataset.notificationPlan) {
+      openMarketingRecord(notification.dataset.notificationPlan);
+    } else {
+      $(`.nav-link[data-page="marketing"]`)?.click();
+    }
   }
   const managementAction = event.target.closest("[data-management-action]");
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
@@ -1165,6 +1206,7 @@ document.addEventListener("click", event => {
   const tab = event.target.closest(".tab"); if (tab) { const root = tab.closest("dialog") || $("#clientDetail"); $$(".tab,.tab-pane", root).forEach(x => x.classList.remove("active")); tab.classList.add("active"); $(`#${tab.dataset.tab}`, root).classList.add("active"); }
 });
 $("#menuButton").onclick = () => $("#sidebar").classList.toggle("open");
+$("#notificationButton").onclick = openNotifications;
 $("#accountButton").onclick = () => openProfile().catch(error => toast(error.message));
 $("#clientSearch").oninput = event => loadClients(event.target.value);
 $("#appointmentForm").onsubmit = async event => {
@@ -1275,6 +1317,7 @@ async function startApplication() {
   document.body.classList.add("authenticated");
   if (applicationStarted) return;
   applicationStarted = true;
+  loadNotifications().catch(() => {});
   api("/api/perfil").then(profile => displayAccountPhoto(profile.foto_perfil))
     .catch(() => {});
   setupPullToRefresh();

@@ -123,6 +123,12 @@ async function listAppointments(db, url) {
         AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento, cr.numero_parcela
     `).all();
+    const { results: marketing } = await db.prepare(`
+      SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_evento
+      FROM planejamento_marketing
+      WHERE COALESCE(data_postagem,data_inicio) IS NOT NULL
+        AND status NOT IN ('Encerrado')
+    `).all();
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
       .map(x => ({
         id: `agendamento-${x.id}`,
@@ -152,7 +158,16 @@ async function listAppointments(db, url) {
         }
       };
     });
-    return json([...appointments, ...payments]);
+    const marketingEvents = marketing.map(item => ({
+      id: `marketing-${item.id}`,
+      title: `${item.tipo} · ${item.titulo}`,
+      start: item.data_evento,
+      allDay: true,
+      backgroundColor: "#8b5cf6",
+      borderColor: "#8b5cf6",
+      extendedProps: { tipo: "marketing", id_marketing: item.id }
+    }));
+    return json([...appointments, ...payments, ...marketingEvents]);
   }
   const today = saoPauloDate();
   const tomorrow = saoPauloDate(1);
@@ -1340,6 +1355,48 @@ async function authApi(db, request, url) {
 
 async function api(request, env, url) {
   const db = env.DB;
+  if (url.pathname === "/api/notificacoes" && request.method === "GET") {
+    const today = saoPauloDate();
+    const todayTime = Date.parse(`${today}T12:00:00Z`);
+    const { results: links } = await db.prepare(`
+      SELECT mop.chave,mop.id_planejamento,pm.status
+      FROM marketing_oportunidade_planos mop
+      LEFT JOIN planejamento_marketing pm ON pm.id=mop.id_planejamento
+    `).all();
+    const opportunities = marketingOpportunities().map(item => {
+      const days = Math.round(
+        (Date.parse(`${item.date}T12:00:00Z`) - todayTime) / 86400000);
+      const link = links.find(entry => entry.chave === item.key);
+      return {
+        id: `oportunidade-${item.key}`, tipo: "oportunidade",
+        titulo: item.name,
+        mensagem: link
+          ? `Faltam ${days} dias. Verifique o andamento da campanha.`
+          : `Faltam ${days} dias e a campanha ainda não foi planejada.`,
+        data: item.date, dias: days, chave: item.key,
+        id_planejamento: link?.id_planejamento || null
+      };
+    }).filter(item => item.dias >= 0 && item.dias <= 30);
+    const { results: actions } = await db.prepare(`
+      SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_acao
+      FROM planejamento_marketing
+      WHERE COALESCE(data_postagem,data_inicio) IS NOT NULL
+        AND status NOT IN ('Publicado','Encerrado')
+    `).all();
+    const actionNotifications = actions.map(item => {
+      const days = Math.round(
+        (Date.parse(`${item.data_acao}T12:00:00Z`) - todayTime) / 86400000);
+      return {
+        id: `marketing-${item.id}`, tipo: "marketing", titulo: item.titulo,
+        mensagem: days < 0 ? `Publicação atrasada há ${Math.abs(days)} dias.`
+          : days === 0 ? "A ação está programada para hoje."
+            : `A ação está programada para daqui a ${days} dias.`,
+        data: item.data_acao, dias: days, id_planejamento: item.id
+      };
+    }).filter(item => item.dias >= -30 && item.dias <= 7);
+    return json([...actionNotifications, ...opportunities]
+      .sort((a, b) => a.dias - b.dias));
+  }
   if (url.pathname === "/api/marketing" && request.method === "GET") {
     const { results } = await db.prepare(`
       SELECT pm.*,EXISTS(SELECT 1 FROM marketing_artes ma
