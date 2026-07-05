@@ -335,6 +335,8 @@ async function loadMarketing() {
   });
   const planned = filtered.filter(item => ["Planejado", "Produção", "Agendado"].includes(item.status)).length;
   const boosted = filtered.filter(item => item.impulsionar).length;
+  const boostCost = filtered.reduce((sum, item) =>
+    sum + (item.impulsionar ? Number(item.orcamento || 0) : 0), 0);
   $("#marketingPanel").innerHTML = `<div class="marketing-toolbar">
     <label>Mês<input id="marketingMonth" type="month" value="${month}"></label>
     <label>Status<select id="marketingStatus"><option value="">Todos</option>${["Ideia","Planejado","Produção","Agendado","Publicado","Encerrado"].map(value => `<option ${value === status ? "selected" : ""}>${value}</option>`).join("")}</select></label>
@@ -343,6 +345,7 @@ async function loadMarketing() {
     <div class="card stat"><span class="muted">Itens no mês</span><strong>${filtered.length}</strong></div>
     <div class="card stat"><span class="muted">Em preparação</span><strong>${planned}</strong></div>
     <div class="card stat"><span class="muted">Impulsionados</span><strong>${boosted}</strong></div>
+    <div class="card stat"><span class="muted">Investimento</span><strong>${money(boostCost)}</strong><small>Impulsionamento no mês</small></div>
   </div>
   <div class="marketing-list">${filtered.map(item => `<article class="card marketing-card">
     ${item.tem_arte ? `<img class="marketing-card-art" src="/api/marketing/${item.id}/arte" alt="Arte de ${escapeHtml(item.titulo)}" loading="lazy">` : ""}
@@ -351,7 +354,7 @@ async function loadMarketing() {
     <div class="marketing-meta">
       <span>Publicação: ${item.data_postagem ? `${dateBr(item.data_postagem)}${item.hora_postagem ? ` às ${item.hora_postagem}` : ""}` : "não definida"}</span>
       <span>Canais: ${escapeHtml(item.plataformas || "não definidos")}</span>
-      ${item.impulsionar ? `<span>Impulsionamento: ${dateBr(item.impulsionamento_inicio)} a ${dateBr(item.impulsionamento_fim)} · ${money(item.orcamento)}</span>` : ""}
+      ${item.impulsionar ? `<span>Impulsionamento: ${dateBr(item.impulsionamento_inicio)} a ${dateBr(item.impulsionamento_fim)} · custo total ${money(item.orcamento)}</span>` : ""}
     </div>
     ${item.texto_postagem ? `<div class="marketing-caption">${escapeHtml(item.texto_postagem)}</div>` : ""}
     <div class="card-actions">
@@ -399,7 +402,7 @@ function openMarketingPlan(itemId = "") {
       </fieldset>
       <label class="check-label"><input name="impulsionar" type="checkbox" value="1" ${item.impulsionar ? "checked" : ""}> Esta publicação será impulsionada</label>
       <div class="fields"><label>Início do impulso<input name="impulsionamento_inicio" type="date" value="${item.impulsionamento_inicio || ""}"></label><label>Fim do impulso<input name="impulsionamento_fim" type="date" value="${item.impulsionamento_fim || ""}"></label></div>
-      <label>Orçamento do impulso<input name="orcamento" data-money inputmode="numeric" value="${item.orcamento ? moneyInput(item.orcamento) : ""}"></label>
+      <label>Custo total do impulsionamento<input name="orcamento" data-money inputmode="numeric" value="${item.orcamento ? moneyInput(item.orcamento) : ""}"><small class="muted">Informe quanto será gasto durante todo o período.</small></label>
       <label>Observações<textarea name="observacoes">${escapeHtml(item.observacoes)}</textarea></label>
       <button class="primary">Salvar planejamento</button>
     </form>`;
