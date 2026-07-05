@@ -781,6 +781,7 @@ async function financialManagement(db, request, url) {
   const today = saoPauloDate();
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("mes") || "")
     ? url.searchParams.get("mes") : today.slice(0, 7);
+  const generalView = url.searchParams.get("visao") === "geral";
   const cashCancellation = url.pathname.match(/^\/api\/financeiro\/caixa\/(\d+)\/cancelar$/);
   if (request.method === "POST" && cashCancellation) {
     const cashId = integer(cashCancellation[1]);
@@ -842,8 +843,9 @@ async function financialManagement(db, request, url) {
       SELECT
         COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
         COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
-      FROM caixa WHERE substr(data_movimento,1,7)=? AND status='Ativo'
-    `).bind(month).first();
+      FROM caixa
+      WHERE status='Ativo' AND (?=1 OR substr(data_movimento,1,7)=?)
+    `).bind(generalView ? 1 : 0, month).first();
     const annual = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) faturamento
       FROM caixa WHERE tipo='Entrada' AND substr(data_movimento,1,4)=?
@@ -852,11 +854,13 @@ async function financialManagement(db, request, url) {
     const payable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE tipo IN ('Despesa','DAS') AND status='Pendente'
-    `).first();
+        AND (?=1 OR competencia=?)
+    `).bind(generalView ? 1 : 0, month).first();
     const manualReceivable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
-      WHERE tipo='Receita' AND status='Pendente' AND competencia=?
-    `).bind(month).first();
+      WHERE tipo='Receita' AND status='Pendente'
+        AND (?=1 OR competencia=?)
+    `).bind(generalView ? 1 : 0, month).first();
     const { results: clientReceivables } = await db.prepare(`
       SELECT f.id id_financeiro,f.id_os,a.id id_agendamento,c.nome,
         f.valor_final,a.data_hora,
@@ -867,20 +871,20 @@ async function financialManagement(db, request, url) {
           WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado') tem_crediario,
         COALESCE((SELECT SUM(cr.valor_parcela) FROM crediario cr
           WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')
-            AND substr(cr.data_vencimento,1,7)=?),0) parcelas_mes
+            AND (?=1 OR substr(cr.data_vencimento,1,7)=?)),0) parcelas_periodo
       FROM financeiro f
       JOIN clientes c ON c.id=f.id_cliente
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
       WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY COALESCE(a.data_hora,f.data_criacao)
-    `).bind(month).all();
+    `).bind(generalView ? 1 : 0, month).all();
     const monthlyClientReceivables = clientReceivables
       .map(item => ({
         ...item,
         saldo: item.tem_crediario
-          ? Number(item.parcelas_mes)
-          : item.data_hora?.slice(0, 7) === month
+          ? Number(item.parcelas_periodo)
+          : generalView || item.data_hora?.slice(0, 7) === month
             ? Math.max(0, item.valor_final - item.pago)
             : 0
       }))
@@ -921,9 +925,9 @@ async function financialManagement(db, request, url) {
         cx.forma_pagamento,c.nome cliente,cx.id_os,os.id_agendamento
       FROM caixa cx LEFT JOIN clientes c ON c.id=cx.id_cliente
       LEFT JOIN ordem_servico os ON os.id=cx.id_os
-      WHERE substr(cx.data_movimento,1,7)=? AND cx.status='Ativo'
+      WHERE cx.status='Ativo' AND (?=1 OR substr(cx.data_movimento,1,7)=?)
       ORDER BY cx.data_movimento DESC,cx.id DESC LIMIT 150
-    `).bind(month).all();
+    `).bind(generalView ? 1 : 0, month).all();
     const { results: expenseCategories } = await db.prepare(`
       SELECT categoria,SUM(valor) total FROM gestao_financeira
       WHERE tipo IN ('Despesa','DAS') AND status='Pago' AND competencia=?
@@ -936,6 +940,7 @@ async function financialManagement(db, request, url) {
     `).bind(month.slice(0, 4)).all();
     return json({
       periodo: month,
+      visao: generalView ? "geral" : "mensal",
       resumo: {
         entradas: cash.entradas, saidas: cash.saidas,
         resultado: cash.entradas - cash.saidas,

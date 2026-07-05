@@ -79,3 +79,6 @@
   .appointment-main{display:grid;grid-template-columns:minmax(0,1fr) auto}.appointment-name{white-space:normal;overflow-wrap:anywhere}
   .fc .fc-toolbar{justify-content:center}.fc .fc-toolbar-chunk:nth-child(2){width:100%;justify-content:center;order:-1}
 }
+
+.management-period{gap:10px}
+@media(max-width:800px){.management-period{flex-direction:column}}

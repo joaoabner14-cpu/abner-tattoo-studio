@@ -95,8 +95,11 @@ async function loadFinance() {
   $("#financePanel").innerHTML = html;
 }
 
-async function loadFinancialManagement(month = todaySp().slice(0, 7)) {
-  managementData = await api(`/api/financeiro/gestao?mes=${month}`);
+async function loadFinancialManagement(
+  month = todaySp().slice(0, 7),
+  view = managementData?.visao || "mensal"
+) {
+  managementData = await api(`/api/financeiro/gestao?mes=${month}&visao=${view}`);
   const summary = managementData.resumo;
   const limitPercent = Math.min(100, (Number(summary.faturamento_anual) / Number(summary.limite_mei)) * 100);
   const pending = managementData.lancamentos.filter(item => item.status === "Pendente").map(item => {
@@ -110,7 +113,10 @@ async function loadFinancialManagement(month = todaySp().slice(0, 7)) {
     <small>${dateBr(item.data_movimento)} · ${escapeHtml(item.categoria)}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}${item.cliente ? ` · ${escapeHtml(item.cliente)}` : ""}</small></div>
     <strong>${item.tipo === "Entrada" ? "+" : "-"} ${money(item.valor)}</strong></div>`).join("") || `<div class="card muted">Nenhuma movimentação neste mês.</div>`;
   const categories = managementData.despesas_categoria.map(item => `<div class="category-row"><span>${escapeHtml(item.categoria)}</span><strong>${money(item.total)}</strong></div>`).join("") || `<p class="muted">Nenhuma despesa paga no período.</p>`;
-  $("#fullFinancePanel").innerHTML = `<div class="management-period"><label>Período<input id="financeMonth" type="month" value="${managementData.periodo}"></label></div>
+  $("#fullFinancePanel").innerHTML = `<div class="management-period">
+    <label>Visão<select id="financeView"><option value="mensal" ${managementData.visao === "mensal" ? "selected" : ""}>Mensal</option><option value="geral" ${managementData.visao === "geral" ? "selected" : ""}>Visão geral</option></select></label>
+    <label ${managementData.visao === "geral" ? "hidden" : ""}>Período<input id="financeMonth" type="month" value="${managementData.periodo}"></label>
+  </div>
     <div class="management-stats">
       <button class="card stat income summary-card" data-summary="entradas"><span class="muted">Entradas</span><strong>${money(summary.entradas)}</strong></button>
       <button class="card stat expense summary-card" data-summary="saidas"><span class="muted">Saídas</span><strong>${money(summary.saidas)}</strong></button>
@@ -126,7 +132,10 @@ async function loadFinancialManagement(month = todaySp().slice(0, 7)) {
     <div class="management-columns"><section><h2>Contas pendentes</h2>${pending}</section><section><h2>Despesas por categoria</h2><div class="card category-list">${categories}</div></section></div>
     <h2>Fluxo de caixa do mês</h2><div class="management-history">${cash}</div>
     <p class="management-note">Controle gerencial. Confira o Relatório Mensal de Receitas Brutas e a DASN-SIMEI nos canais oficiais do MEI.</p>`;
-  $("#financeMonth").onchange = event => loadFinancialManagement(event.target.value);
+  $("#financeMonth")?.addEventListener("change", event =>
+    loadFinancialManagement(event.target.value, managementData.visao));
+  $("#financeView").onchange = event =>
+    loadFinancialManagement(managementData.periodo, event.target.value);
 }
 
 function openSummaryDetails(kind) {
@@ -155,7 +164,7 @@ function openSummaryDetails(kind) {
       })),
       ...managementData.lancamentos.filter(item =>
         item.tipo === "Receita" && item.status === "Pendente" &&
-        item.competencia === managementData.periodo
+        (managementData.visao === "geral" || item.competencia === managementData.periodo)
       ).map(item => ({
         title: item.descricao, detail: item.data_vencimento
           ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
@@ -165,7 +174,8 @@ function openSummaryDetails(kind) {
   }
   if (kind === "pagar") {
     items = managementData.lancamentos.filter(item =>
-      ["Despesa", "DAS"].includes(item.tipo) && item.status === "Pendente"
+      ["Despesa", "DAS"].includes(item.tipo) && item.status === "Pendente" &&
+      (managementData.visao === "geral" || item.competencia === managementData.periodo)
     ).map(item => ({
       title: item.descricao, detail: item.data_vencimento
         ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
