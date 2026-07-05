@@ -89,6 +89,8 @@ async function listAppointments(db, url) {
   if (url.searchParams.get("tipo") !== "lista") {
     const { results: installments } = await db.prepare(`
       SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.valor_parcela,
+        (SELECT COUNT(*) FROM crediario total
+          WHERE total.id_financeiro=cr.id_financeiro AND total.status<>'Cancelado') total_parcelas,
         c.nome, a.id id_agendamento
       FROM crediario cr
       JOIN financeiro f ON f.id=cr.id_financeiro
@@ -111,7 +113,7 @@ async function listAppointments(db, url) {
       const color = overdue ? "#ef6262" : "#36b37e";
       return {
         id: `crediario-${x.id}`,
-        title: `Crediário · ${x.nome} · Parcela ${x.numero_parcela}`,
+        title: `Crediário · ${x.nome} · Parcela ${x.numero_parcela}/${x.total_parcelas}`,
         start: x.data_vencimento,
         allDay: true,
         backgroundColor: color,
@@ -122,6 +124,7 @@ async function listAppointments(db, url) {
           id_agendamento: x.id_agendamento,
           valor: x.valor_parcela,
           parcela: x.numero_parcela,
+          total_parcelas: x.total_parcelas,
           vencida: overdue
         }
       };
@@ -252,8 +255,12 @@ async function openOrder(db, url) {
   `).bind(id).first();
   if (!row) return error("Agendamento não encontrado.", 404);
   const { results: installments } = await db.prepare(`
-    SELECT id, numero_parcela, data_vencimento, data_pagamento, valor_parcela, status
-    FROM crediario WHERE id_financeiro=? AND status<>'Cancelado' ORDER BY numero_parcela
+    SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.data_pagamento,
+      cr.valor_parcela, cr.status,
+      (SELECT COUNT(*) FROM crediario total
+        WHERE total.id_financeiro=cr.id_financeiro AND total.status<>'Cancelado') total_parcelas
+    FROM crediario cr
+    WHERE cr.id_financeiro=? AND cr.status<>'Cancelado' ORDER BY cr.numero_parcela
   `).bind(row.id_financeiro).all();
   const paid = await db.prepare(`
     SELECT COALESCE(SUM(CASE WHEN tipo IN ('Pagamento','Sinal') THEN valor
@@ -596,7 +603,10 @@ async function dashboard(db) {
   `).all();
   const { results: installments } = await db.prepare(`
     SELECT cr.id, cr.numero_parcela parcela, cr.valor_parcela valor,
-      cr.data_vencimento vencimento, c.nome, c.telefone, a.id id_agendamento
+      cr.data_vencimento vencimento,
+      (SELECT COUNT(*) FROM crediario total
+        WHERE total.id_financeiro=cr.id_financeiro AND total.status<>'Cancelado') total_parcelas,
+      c.nome, c.telefone, a.id id_agendamento
     FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
     JOIN clientes c ON c.id=f.id_cliente
     LEFT JOIN ordem_servico os ON os.id=f.id_os
@@ -619,7 +629,7 @@ async function dashboard(db) {
     sinais_pendentes: signals.map(x => ({ ...x, data_agendamento: brDateTime(x.data_hora) })),
     parcelas_atrasadas: late.map(item => {
       const message = encodeURIComponent(
-        `Olá, ${item.nome}, tudo bem?\n\nIdentificamos que a parcela ${item.parcela} do seu crediário, no valor de R$ ${Number(item.valor).toFixed(2).replace(".", ",")}, venceu em *${brDateTime(item.vencimento)}*.\n\nPor favor, entre em contato para regularizarmos o pagamento.`
+        `Olá, ${item.nome}, tudo bem?\n\nIdentificamos que a parcela ${item.parcela}/${item.total_parcelas} do seu crediário, no valor de R$ ${Number(item.valor).toFixed(2).replace(".", ",")}, venceu em *${brDateTime(item.vencimento)}*.\n\nPor favor, entre em contato para regularizarmos o pagamento.`
       );
       return { ...item, link_whatsapp: `https://wa.me/${whatsappPhone(item.telefone)}?text=${message}` };
     })
@@ -669,6 +679,8 @@ async function payInstallment(db, request, url) {
   const installmentId = integer(url.pathname.split("/")[3]);
   const installment = await db.prepare(`
     SELECT cr.id, cr.id_financeiro, cr.numero_parcela, cr.valor_parcela, cr.status,
+      (SELECT COUNT(*) FROM crediario total
+        WHERE total.id_financeiro=cr.id_financeiro AND total.status<>'Cancelado') total_parcelas,
       f.id_cliente, f.id_os
     FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro WHERE cr.id=?
   `).bind(installmentId).first();
@@ -677,7 +689,8 @@ async function payInstallment(db, request, url) {
   if (installment.status === "Cancelado") return error("Esta parcela está cancelada.");
   const data = await body(request);
   const paymentDate = data.data_pagamento || saoPauloDate();
-  const observation = data.observacao || `Parcela ${installment.numero_parcela} do crediário`;
+  const observation = data.observacao ||
+    `Parcela ${installment.numero_parcela}/${installment.total_parcelas} do crediário`;
   await db.batch([
     db.prepare(`
       INSERT INTO financeiro_movimentos
@@ -936,7 +949,10 @@ async function clientSummary(db, url) {
     `).bind(id).all();
     const { results: installments } = await db.prepare(`
       SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.data_pagamento,
-        cr.valor_parcela, cr.status, f.id_os, a.id id_agendamento
+        cr.valor_parcela, cr.status,
+        (SELECT COUNT(*) FROM crediario total
+          WHERE total.id_financeiro=cr.id_financeiro AND total.status<>'Cancelado') total_parcelas,
+        f.id_os, a.id id_agendamento
       FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
