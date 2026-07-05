@@ -791,9 +791,6 @@ async function checkAuthentication() {
   } catch {
     showLogin();
   }
-  if (window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn()) {
-    $("#passkeyLogin").hidden = false;
-  }
 }
 
 $("#loginForm").onsubmit = async event => {
@@ -816,21 +813,6 @@ $("#loginForm").onsubmit = async event => {
     if (button) {
       button.disabled = false;
     }
-  }
-};
-
-$("#enablePasskey").onclick = async () => {
-  $("#sidebar").classList.remove("open");
-  if (!window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn()) {
-    return toast("Este aparelho ou navegador não oferece suporte a Passkeys.");
-  }
-  try {
-    const optionsJSON = await post("/api/auth/passkey/register/options");
-    const response = await window.SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
-    await post("/api/auth/passkey/register/verify", response);
-    toast("Face ID ou biometria ativada.");
-  } catch (error) {
-    toast(error.name === "NotAllowedError" ? "Ativação cancelada." : error.message);
   }
 };
 
