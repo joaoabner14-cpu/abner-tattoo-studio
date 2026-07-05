@@ -1313,7 +1313,9 @@ async function api(request, env, url) {
   const db = env.DB;
   if (url.pathname === "/api/marketing" && request.method === "GET") {
     const { results } = await db.prepare(`
-      SELECT * FROM planejamento_marketing
+      SELECT pm.*,EXISTS(SELECT 1 FROM marketing_artes ma
+        WHERE ma.id_planejamento=pm.id) tem_arte
+      FROM planejamento_marketing pm
       ORDER BY COALESCE(data_postagem,data_inicio,data_criacao) DESC,id DESC
     `).all();
     return json(results);
@@ -1335,6 +1337,30 @@ async function api(request, env, url) {
       data.impulsionamento_fim || null, number(data.orcamento), data.observacoes || "").run();
     return json({ ok: true, id: created.meta.last_row_id }, 201);
   }
+  const marketingArtMatch = url.pathname.match(/^\/api\/marketing\/(\d+)\/arte$/);
+  if (marketingArtMatch && request.method === "GET") {
+    const art = await db.prepare(
+      "SELECT mime_type,dados_base64 FROM marketing_artes WHERE id_planejamento=?"
+    ).bind(integer(marketingArtMatch[1])).first();
+    if (!art) return error("Arte não encontrada.", 404);
+    return new Response(base64ToBytes(art.dados_base64), {
+      headers: { "content-type": art.mime_type, "cache-control": "no-store" }
+    });
+  }
+  if (marketingArtMatch && request.method === "POST") {
+    const data = await body(request);
+    const match = String(data.imagem || "").match(
+      /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/
+    );
+    if (!match || match[2].length > 1400000) return error("A arte é inválida ou muito grande.");
+    await db.prepare(`
+      INSERT INTO marketing_artes(id_planejamento,mime_type,dados_base64,data_atualizacao)
+      VALUES(?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(id_planejamento) DO UPDATE SET mime_type=excluded.mime_type,
+        dados_base64=excluded.dados_base64,data_atualizacao=CURRENT_TIMESTAMP
+    `).bind(integer(marketingArtMatch[1]), match[1], match[2]).run();
+    return json({ ok: true });
+  }
   const marketingMatch = url.pathname.match(/^\/api\/marketing\/(\d+)$/);
   if (marketingMatch && request.method === "PUT") {
     const data = await body(request);
@@ -1355,6 +1381,8 @@ async function api(request, env, url) {
     return json({ ok: true });
   }
   if (marketingMatch && request.method === "DELETE") {
+    await db.prepare("DELETE FROM marketing_artes WHERE id_planejamento=?")
+      .bind(integer(marketingMatch[1])).run();
     await db.prepare("DELETE FROM planejamento_marketing WHERE id=?")
       .bind(integer(marketingMatch[1])).run();
     return json({ ok: true });

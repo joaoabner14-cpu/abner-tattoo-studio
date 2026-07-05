@@ -60,6 +60,7 @@ let dashboardFinanceData = null;
 let profilePhotoData = "";
 let profileCrop = null;
 let marketingData = [];
+let marketingArtData = "";
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -344,6 +345,7 @@ async function loadMarketing() {
     <div class="card stat"><span class="muted">Impulsionados</span><strong>${boosted}</strong></div>
   </div>
   <div class="marketing-list">${filtered.map(item => `<article class="card marketing-card">
+    ${item.tem_arte ? `<img class="marketing-card-art" src="/api/marketing/${item.id}/arte" alt="Arte de ${escapeHtml(item.titulo)}" loading="lazy">` : ""}
     <div class="card-head"><div><span class="badge">${escapeHtml(item.tipo)}</span><strong>${escapeHtml(item.titulo)}</strong></div><span class="badge">${escapeHtml(item.status)}</span></div>
     <p>${escapeHtml(item.descricao || "Sem descrição.")}</p>
     <div class="marketing-meta">
@@ -364,8 +366,14 @@ async function loadMarketing() {
 
 function openMarketingPlan(itemId = "") {
   const item = marketingData.find(entry => String(entry.id) === String(itemId)) || {};
+  marketingArtData = "";
   $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} planejamento</h2><button class="close" type="button">×</button></header>
     <form id="marketingForm">
+      <label class="marketing-art-field">
+        <span id="marketingArtPreview" class="marketing-art-preview">${item.tem_arte ? `<img src="/api/marketing/${item.id}/arte?v=${Date.now()}" alt="Arte da campanha">` : "Adicionar arte"}</span>
+        <span>${item.tem_arte ? "Substituir arte" : "Escolher arte"}</span>
+        <input name="arte" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+      </label>
       <label>Título<input name="titulo" value="${escapeHtml(item.titulo)}" required></label>
       <div class="fields"><label>Tipo<select name="tipo">${["Promoção","Evento","Postagem"].map(value => `<option ${value === item.tipo ? "selected" : ""}>${value}</option>`).join("")}</select></label>
       <label>Status<select name="status">${["Ideia","Planejado","Produção","Agendado","Publicado","Encerrado"].map(value => `<option ${value === item.status ? "selected" : ""}>${value}</option>`).join("")}</select></label></div>
@@ -384,9 +392,35 @@ function openMarketingPlan(itemId = "") {
     </form>`;
   applyInputMasks($("#actionContent"));
   $("#actionDialog").showModal();
+  $("#marketingForm").elements.arte.onchange = async event => {
+    try {
+      const image = await loadProfilePhoto(event.target.files[0]);
+      const scale = Math.min(1, 1200 / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+      marketingArtData = canvas.toDataURL("image/jpeg", .82);
+      if (marketingArtData.length > 1400000) {
+        throw new Error("A arte ficou muito grande. Escolha uma imagem menor.");
+      }
+      $("#marketingArtPreview").innerHTML = `<img src="${marketingArtData}" alt="Prévia da arte">`;
+    } catch (error) {
+      marketingArtData = "";
+      toast(error.message);
+    }
+  };
   $("#marketingForm").onsubmit = async event => {
     event.preventDefault();
-    await send(item.id ? `/api/marketing/${item.id}` : "/api/marketing", item.id ? "PUT" : "POST", event.currentTarget);
+    const form = event.currentTarget;
+    form.elements.arte.disabled = true;
+    const result = await send(item.id ? `/api/marketing/${item.id}` : "/api/marketing",
+      item.id ? "PUT" : "POST", form);
+    form.elements.arte.disabled = false;
+    const planId = item.id || result.id;
+    if (marketingArtData) {
+      await post(`/api/marketing/${planId}/arte`, { imagem: marketingArtData });
+    }
     $("#actionDialog").close();
     toast("Planejamento salvo.");
     await loadMarketing();
