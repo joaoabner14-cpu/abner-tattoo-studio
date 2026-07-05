@@ -57,6 +57,7 @@ let clientSearchRequest = 0;
 let stockData = null;
 let managementData = null;
 let dashboardFinanceData = null;
+let profilePhotoData = "";
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -490,10 +491,47 @@ function openNewClient() {
   };
 }
 
+function resizeProfilePhoto(file) {
+  return new Promise((resolve, reject) => {
+    if (!file?.type.startsWith("image/")) return reject(new Error("Selecione uma imagem válida."));
+    if (file.size > 5 * 1024 * 1024) return reject(new Error("A imagem deve ter no máximo 5 MB."));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("Não foi possível processar a imagem."));
+      image.onload = () => {
+        const size = Math.min(image.width, image.height);
+        const canvas = document.createElement("canvas");
+        canvas.width = 320;
+        canvas.height = 320;
+        canvas.getContext("2d").drawImage(image,
+          (image.width - size) / 2, (image.height - size) / 2, size, size,
+          0, 0, 320, 320);
+        resolve(canvas.toDataURL("image/jpeg", .82));
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function displayAccountPhoto(photo) {
+  $("#accountButton").innerHTML = photo
+    ? `<img src="${photo}" alt="Foto de perfil">`
+    : `<span aria-hidden="true">👤</span>`;
+}
+
 async function openProfile() {
   const profile = await api("/api/perfil");
+  profilePhotoData = profile.foto_perfil || "";
   $("#actionContent").innerHTML = `<header><h2>Perfil e estúdio</h2><button class="close" type="button">×</button></header>
     <form id="profileForm">
+      <label class="profile-photo-field">
+        <span class="profile-photo-preview">${profilePhotoData ? `<img src="${profilePhotoData}" alt="Foto de perfil">` : "👤"}</span>
+        <span>Escolher foto</span>
+        <input name="foto" type="file" accept="image/*" hidden>
+      </label>
       <label>Seu nome<input name="nome" value="${escapeHtml(profile.nome)}" required></label>
       <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(profile.nome_estudio)}" required></label>
       <label>Endereço<input name="endereco" value="${escapeHtml(profile.endereco)}"></label>
@@ -511,9 +549,23 @@ async function openProfile() {
     </div>`;
   applyInputMasks($("#actionContent"));
   $("#actionDialog").showModal();
+  $("#profileForm").elements.foto.onchange = async event => {
+    try {
+      profilePhotoData = await resizeProfilePhoto(event.target.files[0]);
+      $(".profile-photo-preview").innerHTML = `<img src="${profilePhotoData}" alt="Foto de perfil">`;
+    } catch (error) {
+      toast(error.message);
+    }
+  };
   $("#profileForm").onsubmit = async event => {
     event.preventDefault();
-    await send("/api/perfil", "PUT", event.currentTarget);
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    delete values.foto;
+    await api("/api/perfil", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...values, foto_perfil: profilePhotoData })
+    });
+    displayAccountPhoto(profilePhotoData);
     $("#actionDialog").close();
     toast("Perfil atualizado.");
   };
@@ -974,6 +1026,8 @@ async function startApplication() {
   document.body.classList.add("authenticated");
   if (applicationStarted) return;
   applicationStarted = true;
+  api("/api/perfil").then(profile => displayAccountPhoto(profile.foto_perfil))
+    .catch(() => {});
   setupPullToRefresh();
   try {
     const savedPage = sessionStorage.getItem("activePage");

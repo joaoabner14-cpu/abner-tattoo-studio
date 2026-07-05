@@ -1144,7 +1144,7 @@ async function currentUser(db, request) {
   const token = parseCookies(request).studio_session;
   if (!token) return null;
   const row = await db.prepare(`
-    SELECT u.id,u.login,u.nome,s.id id_sessao
+    SELECT u.id,u.login,u.nome,u.foto_perfil,s.id id_sessao
     FROM sessoes s JOIN usuarios u ON u.id=s.id_usuario
     WHERE s.token_hash=? AND s.revogada=0 AND s.data_expiracao>CURRENT_TIMESTAMP
       AND u.ativo=1 LIMIT 1
@@ -1316,13 +1316,18 @@ async function api(request, env, url) {
     if (!user) return error("Não autorizado.", 401);
     if (request.method === "GET") {
       const studio = await db.prepare("SELECT * FROM perfil_estudio WHERE id=1").first();
-      return json({ nome: user.nome, ...(studio || {}) });
+      return json({ nome: user.nome, foto_perfil: user.foto_perfil, ...(studio || {}) });
     }
     if (request.method === "PUT") {
       const data = await body(request);
+      const photo = String(data.foto_perfil || "");
+      if (photo && (!/^data:image\/(?:jpeg|png|webp);base64,/.test(photo) ||
+        photo.length > 300000)) {
+        return error("A foto de perfil é inválida ou muito grande.");
+      }
       await db.batch([
-        db.prepare("UPDATE usuarios SET nome=? WHERE id=?")
-          .bind(required(data.nome, "nome"), user.id),
+        db.prepare("UPDATE usuarios SET nome=?,foto_perfil=? WHERE id=?")
+          .bind(required(data.nome, "nome"), photo || null, user.id),
         db.prepare(`
           INSERT INTO perfil_estudio(id,nome_estudio,endereco,cnpj,instagram,data_atualizacao)
           VALUES(1,?,?,?,?,CURRENT_TIMESTAMP)
