@@ -368,6 +368,8 @@ function openMarketingPlan(itemId = "") {
   const item = marketingData.find(entry => String(entry.id) === String(itemId)) || {};
   marketingArtData = "";
   const selectedPlatforms = String(item.plataformas || "").split(",").map(value => value.trim());
+  const selectedObjectives = String(item.objetivo || "").split(",").map(value => value.trim());
+  const selectedAudiences = String(item.publico || "").split(",").map(value => value.trim());
   $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} planejamento</h2><button class="close" type="button">×</button></header>
     <form id="marketingForm">
       <label class="marketing-art-field">
@@ -387,7 +389,14 @@ function openMarketingPlan(itemId = "") {
       <div class="fields"><label>Início da ação<input name="data_inicio" type="date" value="${item.data_inicio || ""}"></label><label>Fim da ação<input name="data_fim" type="date" value="${item.data_fim || ""}"></label></div>
       <div class="fields"><label>Data da postagem<input name="data_postagem" type="date" value="${item.data_postagem || ""}"></label><label>Horário<input name="hora_postagem" type="time" value="${item.hora_postagem || ""}"></label></div>
       <label>Legenda planejada<textarea name="texto_postagem" placeholder="Texto, chamada e hashtags...">${escapeHtml(item.texto_postagem)}</textarea></label>
-      <div class="fields"><label>Objetivo<input name="objetivo" placeholder="Alcance, agendamentos..." value="${escapeHtml(item.objetivo)}"></label><label>Público<input name="publico" value="${escapeHtml(item.publico)}"></label></div>
+      <fieldset class="platform-field"><legend>Objetivos</legend>
+        <input name="objetivo" type="hidden" value="${escapeHtml(item.objetivo)}">
+        <div class="platform-options">${["Gerar agendamentos","Aumentar alcance","Gerar engajamento","Ganhar seguidores","Divulgar evento","Vender promoção"].map(value => `<label><input type="checkbox" data-objective value="${value}" ${selectedObjectives.includes(value) ? "checked" : ""}><span>${value}</span></label>`).join("")}</div>
+      </fieldset>
+      <fieldset class="platform-field"><legend>Público</legend>
+        <input name="publico" type="hidden" value="${escapeHtml(item.publico)}">
+        <div class="platform-options">${["Novos clientes","Clientes atuais","Pessoas da região","Interessados em tatuagem","Público jovem","Pessoas que já interagiram"].map(value => `<label><input type="checkbox" data-audience value="${value}" ${selectedAudiences.includes(value) ? "checked" : ""}><span>${value}</span></label>`).join("")}</div>
+      </fieldset>
       <label class="check-label"><input name="impulsionar" type="checkbox" value="1" ${item.impulsionar ? "checked" : ""}> Esta publicação será impulsionada</label>
       <div class="fields"><label>Início do impulso<input name="impulsionamento_inicio" type="date" value="${item.impulsionamento_inicio || ""}"></label><label>Fim do impulso<input name="impulsionamento_fim" type="date" value="${item.impulsionamento_fim || ""}"></label></div>
       <label>Orçamento do impulso<input name="orcamento" data-money inputmode="numeric" value="${item.orcamento ? moneyInput(item.orcamento) : ""}"></label>
@@ -418,6 +427,10 @@ function openMarketingPlan(itemId = "") {
     event.preventDefault();
     const form = event.currentTarget;
     form.elements.plataformas.value = $$("[data-platform]:checked", form)
+      .map(input => input.value).join(", ");
+    form.elements.objetivo.value = $$("[data-objective]:checked", form)
+      .map(input => input.value).join(", ");
+    form.elements.publico.value = $$("[data-audience]:checked", form)
       .map(input => input.value).join(", ");
     form.elements.arte.disabled = true;
     const result = await send(item.id ? `/api/marketing/${item.id}` : "/api/marketing",
