@@ -353,14 +353,16 @@ async function loadMarketing() {
   $("#marketingPanel").innerHTML = `${next ? `<section class="marketing-next ${!next.id_planejamento && next.days <= 30 ? "needs-attention" : ""}">
     <div><span class="eyebrow">PRÓXIMA OPORTUNIDADE</span><h2>${escapeHtml(next.name)}</h2>
     <p>${dateBr(next.date)} · ${next.days === 0 ? "é hoje" : `faltam ${next.days} dias`} · ${guidance(next)}</p></div>
-    <button class="${next.id_planejamento ? "secondary open-opportunity-plan" : "primary plan-opportunity"}" data-key="${next.key}" data-id="${next.id_planejamento || ""}">${next.id_planejamento ? "Abrir campanha" : "Planejar campanha"}</button>
+    <div class="opportunity-actions"><button class="${next.id_planejamento ? "secondary open-opportunity-plan" : "primary plan-opportunity"}" data-key="${next.key}" data-id="${next.id_planejamento || ""}">${next.id_planejamento ? "Abrir campanha" : "Planejar campanha"}</button>
+    ${next.id_planejamento ? `<button class="danger restart-opportunity-plan" data-id="${next.id_planejamento}">Reiniciar</button>` : ""}</div>
   </section>` : ""}
   ${attention.length ? `<div class="marketing-alert"><strong>${attention.length} oportunidade(s) precisam de planejamento nos próximos 30 dias.</strong></div>` : ""}
   <h2>Calendário de oportunidades</h2>
   <div class="opportunity-grid">${upcoming.map(item => `<article class="card opportunity-card ${!item.id_planejamento && item.days <= 30 ? "is-urgent" : ""}">
     <div><strong>${escapeHtml(item.name)}</strong><small>${dateBr(item.date)} · ${item.days === 0 ? "Hoje" : `${item.days} dias`}</small><small>${guidance(item)}</small></div>
     <span class="badge">${escapeHtml(item.status)}</span>
-    <button class="${item.id_planejamento ? "secondary open-opportunity-plan" : "primary plan-opportunity"}" data-key="${item.key}" data-id="${item.id_planejamento || ""}">${item.id_planejamento ? "Abrir" : "Planejar"}</button>
+    <div class="opportunity-actions"><button class="${item.id_planejamento ? "secondary open-opportunity-plan" : "primary plan-opportunity"}" data-key="${item.key}" data-id="${item.id_planejamento || ""}">${item.id_planejamento ? "Abrir" : "Planejar"}</button>
+    ${item.id_planejamento ? `<button class="danger restart-opportunity-plan" data-id="${item.id_planejamento}">Reiniciar</button>` : ""}</div>
   </article>`).join("")}</div>
   <h2>Banco de campanhas</h2>
   <div class="marketing-toolbar">
@@ -1082,6 +1084,14 @@ document.addEventListener("click", event => {
   }
   const opportunityOpen = event.target.closest(".open-opportunity-plan");
   if (opportunityOpen) openMarketingPlan(opportunityOpen.dataset.id);
+  const opportunityRestart = event.target.closest(".restart-opportunity-plan");
+  if (opportunityRestart && confirm("Excluir esta campanha e reiniciar o planejamento?")) {
+    api(`/api/marketing/${opportunityRestart.dataset.id}`, { method: "DELETE" })
+      .then(() => {
+        toast("Planejamento removido. A oportunidade está livre para recomeçar.");
+        loadMarketing();
+      }).catch(error => toast(error.message));
+  }
   const marketingDelete = event.target.closest(".delete-marketing");
   if (marketingDelete && confirm("Excluir este planejamento?")) {
     api(`/api/marketing/${marketingDelete.dataset.id}`, { method: "DELETE" })
