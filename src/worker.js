@@ -912,7 +912,15 @@ async function clientSummary(db, url) {
       crediarios: installments, ajustes: adjustments });
   }
   const { results: orders } = await db.prepare(`
-    SELECT os.id id_os, a.id id_agendamento, a.data_hora, os.status,
+    SELECT os.id id_os, a.id id_agendamento, a.data_hora,
+      CASE a.status
+        WHEN 'Agendado' THEN 'Agendada'
+        WHEN 'Confirmado' THEN 'Confirmada'
+        WHEN 'Concluido' THEN 'Finalizada'
+        WHEN 'Cancelado' THEN 'Cancelada'
+        WHEN 'Remarcado' THEN 'Remarcada'
+        ELSE os.status
+      END status,
       os.descricao, f.valor_final
     FROM ordem_servico os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
@@ -1156,8 +1164,20 @@ async function api(request, env, url) {
     const status = data.status === "Finalizado" ? "Concluido" : data.status;
     const allowedStatuses = ["Agendado", "Confirmado", "Concluido", "Cancelado", "Remarcado"];
     if (!allowedStatuses.includes(status)) return error("Status de agendamento inválido.", 400);
-    await db.prepare("UPDATE agendamentos SET data_hora=?,status=? WHERE id=?")
-      .bind(`${data.data} ${data.hora}:00`, status, integer(url.pathname.split("/").pop())).run();
+    const orderStatuses = {
+      Agendado: "Agendada",
+      Confirmado: "Confirmada",
+      Concluido: "Finalizada",
+      Cancelado: "Cancelada",
+      Remarcado: "Remarcada"
+    };
+    const appointmentId = integer(url.pathname.split("/").pop());
+    await db.batch([
+      db.prepare("UPDATE agendamentos SET data_hora=?,status=? WHERE id=?")
+        .bind(`${data.data} ${data.hora}:00`, status, appointmentId),
+      db.prepare("UPDATE ordem_servico SET status=? WHERE id_agendamento=?")
+        .bind(orderStatuses[status], appointmentId)
+    ]);
     return json({ ok: true });
   }
   if (request.method === "GET" && url.pathname === "/api/os") return openOrder(db, url);
