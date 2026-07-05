@@ -86,7 +86,7 @@ async function loadFinance() {
   const html = `<div class="stats">
     <div class="card stat"><span class="muted">Disponível hoje</span><strong>${money(data.resumo.receber_hoje)}</strong><small>Entradas disponíveis no caixa</small></div>
     <div class="card stat"><span class="muted">Entrou no mês</span><strong>${money(data.resumo.receber_mes)}</strong><small>Total recebido neste mês</small></div>
-    <div class="card stat stat-late"><span class="muted">Crediário atrasado</span><strong>${money(data.resumo.atrasado)}</strong><small>Parcelas vencidas neste mês</small></div>
+    <div class="card stat stat-late"><span class="muted">Crediário atrasado</span><strong>${money(data.resumo.atrasado)}</strong><small>Todos os pagamentos vencidos</small></div>
   </div><h2>Sinais pendentes</h2>${data.sinais_pendentes.map(x => `<div class="card card-head"><div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${money(x.valor)}</div></div><button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button></div>`).join("") || `<div class="card muted">Nenhum sinal pendente.</div>`}
   <h2>Parcelas atrasadas</h2>${data.parcelas_atrasadas.map(x => `<div class="card overdue-card">
     <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>

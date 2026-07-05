@@ -604,7 +604,6 @@ async function dashboard(db) {
     WHERE cr.status IN ('Pendente','Atrasado') ORDER BY cr.data_vencimento
   `).all();
   const late = installments.filter(x => x.vencimento < today);
-  const lateCurrentMonth = late.filter(x => x.vencimento.startsWith(month));
   const cash = await db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,10)=? THEN valor ELSE 0 END),0) hoje,
@@ -615,7 +614,7 @@ async function dashboard(db) {
     resumo: {
       receber_hoje: cash.hoje,
       receber_mes: cash.mes,
-      atrasado: lateCurrentMonth.reduce((sum, item) => sum + item.valor, 0)
+      atrasado: late.reduce((sum, item) => sum + item.valor, 0)
     },
     sinais_pendentes: signals.map(x => ({ ...x, data_agendamento: brDateTime(x.data_hora) })),
     parcelas_atrasadas: late.map(item => {
