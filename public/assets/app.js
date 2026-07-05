@@ -615,7 +615,15 @@ async function openOrder(appointmentId, initialTab = "os-data") {
       <h2>Histórico financeiro</h2><div class="finance-history">${financeHistory}</div></div>`;
   $("#orderDialog").showModal();
   $(`[data-tab=${initialTab}]`, $("#orderDialog"))?.click();
-  $("#scheduleForm").onsubmit = async e => { e.preventDefault(); await send(`/api/agendamentos/${data.id_agendamento}`, "PUT", e.currentTarget); toast("Agendamento atualizado."); $("#orderDialog").close(); loadAgenda(); };
+  $("#scheduleForm").onsubmit = async e => {
+    e.preventDefault();
+    const result = await send(`/api/agendamentos/${data.id_agendamento}`, "PUT", e.currentTarget);
+    toast(result.estorno_sinal > 0
+      ? `Agendamento cancelado. Sinal de ${money(result.estorno_sinal)} estornado.`
+      : "Agendamento atualizado.");
+    $("#orderDialog").close();
+    loadAgenda();
+  };
 }
 
 document.addEventListener("input", event => {

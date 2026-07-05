@@ -599,7 +599,8 @@ async function dashboard(db) {
     SELECT c.nome, f.valor_sinal valor, os.id id_os, a.id id_agendamento, a.data_hora
     FROM financeiro f JOIN clientes c ON c.id=f.id_cliente
     JOIN ordem_servico os ON os.id=f.id_os JOIN agendamentos a ON a.id=os.id_agendamento
-    WHERE f.sinal_pago=0 AND f.valor_sinal>0 ORDER BY a.data_hora
+    WHERE f.sinal_pago=0 AND f.valor_sinal>0 AND a.status<>'Cancelado'
+    ORDER BY a.data_hora
   `).all();
   const { results: installments } = await db.prepare(`
     SELECT cr.id, cr.numero_parcela parcela, cr.valor_parcela valor,
@@ -1228,13 +1229,64 @@ async function api(request, env, url) {
       Remarcado: "Remarcada"
     };
     const appointmentId = integer(url.pathname.split("/").pop());
-    await db.batch([
+    const statements = [
       db.prepare("UPDATE agendamentos SET data_hora=?,status=? WHERE id=?")
         .bind(`${data.data} ${data.hora}:00`, status, appointmentId),
       db.prepare("UPDATE ordem_servico SET status=? WHERE id_agendamento=?")
         .bind(orderStatuses[status], appointmentId)
-    ]);
-    return json({ ok: true });
+    ];
+    let signalRefund = 0;
+    if (status === "Cancelado") {
+      const financial = await db.prepare(`
+        SELECT f.id, f.id_cliente, f.id_os,
+          COALESCE(SUM(CASE WHEN fm.tipo='Sinal' THEN fm.valor
+            WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END),0) sinal_recebido,
+          COALESCE((
+            SELECT forma_pagamento FROM financeiro_movimentos
+            WHERE id_financeiro=f.id AND tipo='Sinal'
+            ORDER BY id DESC LIMIT 1
+          ),'Pix') forma_pagamento
+        FROM financeiro f
+        JOIN ordem_servico os ON os.id=f.id_os
+        LEFT JOIN financeiro_movimentos fm ON fm.id_financeiro=f.id
+        WHERE os.id_agendamento=?
+        GROUP BY f.id
+      `).bind(appointmentId).first();
+      if (financial) {
+        signalRefund = Math.max(0, Number(financial.sinal_recebido));
+        statements.push(
+          db.prepare(`
+            UPDATE financeiro SET status='Cancelado',sinal_pago=0,
+              data_pagamento_sinal=NULL WHERE id=?
+          `).bind(financial.id),
+          db.prepare(`
+            UPDATE crediario SET status='Cancelado'
+            WHERE id_financeiro=? AND status IN ('Pendente','Atrasado')
+          `).bind(financial.id)
+        );
+        if (signalRefund > 0) {
+          const refundDate = saoPauloDate();
+          const description = "Estorno automático do sinal por cancelamento";
+          statements.push(
+            db.prepare(`
+              INSERT INTO financeiro_movimentos
+                (id_financeiro,tipo,valor,forma_pagamento,observacao,data_pagamento)
+              VALUES(?,'Estorno',?,?,?,?)
+            `).bind(financial.id, signalRefund, financial.forma_pagamento,
+              description, refundDate),
+            db.prepare(`
+              INSERT INTO caixa
+                (data_movimento,tipo,categoria,descricao,valor,id_cliente,
+                  id_financeiro,id_os,forma_pagamento)
+              VALUES(?,'Saida','Estorno',?,?,?,?,?,?)
+            `).bind(refundDate, description, signalRefund, financial.id_cliente,
+              financial.id, financial.id_os, financial.forma_pagamento)
+          );
+        }
+      }
+    }
+    await db.batch(statements);
+    return json({ ok: true, estorno_sinal: signalRefund });
   }
   if (request.method === "GET" && url.pathname === "/api/os") return openOrder(db, url);
   if (/^\/api\/os\/\d+(?:\/(?:materiais|tintas)(?:\/\d+)?)?$/.test(url.pathname)) {
