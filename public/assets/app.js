@@ -35,11 +35,19 @@ const maskCpf = input => {
     .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
     .replace(/\.(\d{3})(\d)/, ".$1-$2");
 };
+const maskCnpj = input => {
+  const digits = input.value.replace(/\D/g, "").slice(0, 14);
+  input.value = digits.replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2");
+};
 const applyInputMasks = (root = document) => {
   $$("[data-money]", root).forEach(input => {
     if (input.value && !input.value.includes("R$")) input.value = moneyInput(input.value);
   });
   $$("[data-cpf]", root).forEach(maskCpf);
+  $$("[data-cnpj]", root).forEach(maskCnpj);
 };
 
 let calendar;
@@ -489,10 +497,11 @@ async function openProfile() {
       <label>Seu nome<input name="nome" value="${escapeHtml(profile.nome)}" required></label>
       <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(profile.nome_estudio)}" required></label>
       <label>Endereço<input name="endereco" value="${escapeHtml(profile.endereco)}"></label>
-      <label>CNPJ<input name="cnpj" inputmode="numeric" value="${escapeHtml(profile.cnpj)}"></label>
+      <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(profile.cnpj)}"></label>
       <label>Instagram<input name="instagram" placeholder="@usuario" value="${escapeHtml(profile.instagram)}"></label>
       <button class="primary">Salvar informações</button>
     </form>`;
+  applyInputMasks($("#actionContent"));
   $("#actionDialog").showModal();
   $("#profileForm").onsubmit = async event => {
     event.preventDefault();
@@ -741,6 +750,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
 document.addEventListener("input", event => {
   if (event.target.matches("[data-money]")) maskMoney(event.target);
   if (event.target.matches("[data-cpf]")) maskCpf(event.target);
+  if (event.target.matches("[data-cnpj]")) maskCnpj(event.target);
 });
 
 document.addEventListener("click", event => {
