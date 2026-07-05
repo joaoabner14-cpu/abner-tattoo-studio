@@ -855,31 +855,36 @@ async function financialManagement(db, request, url) {
     `).first();
     const manualReceivable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
-      WHERE tipo='Receita' AND status='Pendente'
-    `).first();
-    const clientReceivable = await db.prepare(`
-      SELECT COALESCE(SUM(MAX(0,f.valor_final-COALESCE((
-        SELECT SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
-          WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
-        FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0))),0) total
-      FROM financeiro f
-      LEFT JOIN ordem_servico os ON os.id=f.id_os
-      LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
-    `).first();
+      WHERE tipo='Receita' AND status='Pendente' AND competencia=?
+    `).bind(month).first();
     const { results: clientReceivables } = await db.prepare(`
       SELECT f.id id_financeiro,f.id_os,a.id id_agendamento,c.nome,
-        f.valor_final,
+        f.valor_final,a.data_hora,
         COALESCE((SELECT SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
           WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
-          FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago
+          FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago,
+        EXISTS(SELECT 1 FROM crediario cr
+          WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado') tem_crediario,
+        COALESCE((SELECT SUM(cr.valor_parcela) FROM crediario cr
+          WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')
+            AND substr(cr.data_vencimento,1,7)=?),0) parcelas_mes
       FROM financeiro f
       JOIN clientes c ON c.id=f.id_cliente
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
       WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY COALESCE(a.data_hora,f.data_criacao)
-    `).all();
+    `).bind(month).all();
+    const monthlyClientReceivables = clientReceivables
+      .map(item => ({
+        ...item,
+        saldo: item.tem_crediario
+          ? Number(item.parcelas_mes)
+          : item.data_hora?.slice(0, 7) === month
+            ? Math.max(0, item.valor_final - item.pago)
+            : 0
+      }))
+      .filter(item => item.saldo > 0);
     const overdueBills = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE status='Pendente' AND data_vencimento<?
@@ -934,16 +939,15 @@ async function financialManagement(db, request, url) {
       resumo: {
         entradas: cash.entradas, saidas: cash.saidas,
         resultado: cash.entradas - cash.saidas,
-        receber: manualReceivable.total + clientReceivable.total,
+        receber: manualReceivable.total +
+          monthlyClientReceivables.reduce((sum, item) => sum + item.saldo, 0),
         pagar: payable.total,
         atrasado: overdueBills.total + overdueCredit.total,
         faturamento_anual: annual.faturamento,
         limite_mei: 81000
       },
       lancamentos: launches, caixa: cashHistory,
-      recebiveis_clientes: clientReceivables
-        .map(item => ({ ...item, saldo: Math.max(0, item.valor_final - item.pago) }))
-        .filter(item => item.saldo > 0),
+      recebiveis_clientes: monthlyClientReceivables,
       crediarios_atrasados: overdueCredits,
       despesas_categoria: expenseCategories, faturamento_mensal: monthlyRevenue
     });

@@ -154,7 +154,8 @@ function openSummaryDetails(kind) {
         appointmentId: item.id_agendamento
       })),
       ...managementData.lancamentos.filter(item =>
-        item.tipo === "Receita" && item.status === "Pendente"
+        item.tipo === "Receita" && item.status === "Pendente" &&
+        item.competencia === managementData.periodo
       ).map(item => ({
         title: item.descricao, detail: item.data_vencimento
           ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
