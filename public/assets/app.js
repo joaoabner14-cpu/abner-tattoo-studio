@@ -58,6 +58,7 @@ let stockData = null;
 let managementData = null;
 let dashboardFinanceData = null;
 let profilePhotoData = "";
+let profileCrop = null;
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -491,7 +492,7 @@ function openNewClient() {
   };
 }
 
-function resizeProfilePhoto(file) {
+function loadProfilePhoto(file) {
   return new Promise((resolve, reject) => {
     if (!file?.type.startsWith("image/")) return reject(new Error("Selecione uma imagem válida."));
     if (file.size > 5 * 1024 * 1024) return reject(new Error("A imagem deve ter no máximo 5 MB."));
@@ -500,20 +501,47 @@ function resizeProfilePhoto(file) {
     reader.onload = () => {
       const image = new Image();
       image.onerror = () => reject(new Error("Não foi possível processar a imagem."));
-      image.onload = () => {
-        const size = Math.min(image.width, image.height);
-        const canvas = document.createElement("canvas");
-        canvas.width = 320;
-        canvas.height = 320;
-        canvas.getContext("2d").drawImage(image,
-          (image.width - size) / 2, (image.height - size) / 2, size, size,
-          0, 0, 320, 320);
-        resolve(canvas.toDataURL("image/jpeg", .82));
-      };
+      image.onload = () => resolve(image);
       image.src = reader.result;
     };
     reader.readAsDataURL(file);
   });
+}
+
+function renderProfileCrop() {
+  if (!profileCrop) return;
+  const { image, viewport, zoom } = profileCrop;
+  const scale = Math.max(viewport / image.width, viewport / image.height) * zoom;
+  const width = image.width * scale;
+  const height = image.height * scale;
+  profileCrop.offsetX = Math.max(-(width - viewport) / 2,
+    Math.min((width - viewport) / 2, profileCrop.offsetX));
+  profileCrop.offsetY = Math.max(-(height - viewport) / 2,
+    Math.min((height - viewport) / 2, profileCrop.offsetY));
+  const cropImage = $("#profileCropImage");
+  cropImage.style.width = `${width}px`;
+  cropImage.style.height = `${height}px`;
+  cropImage.style.transform = `translate(${(viewport - width) / 2 + profileCrop.offsetX}px, ${(viewport - height) / 2 + profileCrop.offsetY}px)`;
+}
+
+function confirmProfileCrop() {
+  if (!profileCrop) return;
+  const { image, viewport, zoom, offsetX, offsetY } = profileCrop;
+  const scale = Math.max(viewport / image.width, viewport / image.height) * zoom;
+  const width = image.width * scale;
+  const height = image.height * scale;
+  const canvas = document.createElement("canvas");
+  canvas.width = 320;
+  canvas.height = 320;
+  const ratio = 320 / viewport;
+  canvas.getContext("2d").drawImage(image,
+    ((viewport - width) / 2 + offsetX) * ratio,
+    ((viewport - height) / 2 + offsetY) * ratio,
+    width * ratio, height * ratio);
+  profilePhotoData = canvas.toDataURL("image/jpeg", .82);
+  $(".profile-photo-preview").innerHTML = `<img src="${profilePhotoData}" alt="Foto de perfil">`;
+  $("#profileCropEditor").hidden = true;
+  profileCrop = null;
 }
 
 function displayAccountPhoto(photo) {
@@ -532,6 +560,12 @@ async function openProfile() {
         <span>Escolher foto</span>
         <input name="foto" type="file" accept="image/*" hidden>
       </label>
+      <div id="profileCropEditor" class="profile-crop-editor" hidden>
+        <p>Arraste a foto para enquadrar</p>
+        <div id="profileCropViewport" class="profile-crop-viewport"><img id="profileCropImage" alt=""></div>
+        <label>Zoom<input id="profileCropZoom" type="range" min="1" max="3" step=".01" value="1"></label>
+        <div class="profile-crop-actions"><button class="secondary" id="cancelProfileCrop" type="button">Cancelar</button><button class="primary" id="confirmProfileCrop" type="button">Usar foto</button></div>
+      </div>
       <label>Seu nome<input name="nome" value="${escapeHtml(profile.nome)}" required></label>
       <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(profile.nome_estudio)}" required></label>
       <label>Endereço<input name="endereco" value="${escapeHtml(profile.endereco)}"></label>
@@ -551,11 +585,39 @@ async function openProfile() {
   $("#actionDialog").showModal();
   $("#profileForm").elements.foto.onchange = async event => {
     try {
-      profilePhotoData = await resizeProfilePhoto(event.target.files[0]);
-      $(".profile-photo-preview").innerHTML = `<img src="${profilePhotoData}" alt="Foto de perfil">`;
+      const image = await loadProfilePhoto(event.target.files[0]);
+      profileCrop = { image, viewport: 240, zoom: 1, offsetX: 0, offsetY: 0 };
+      $("#profileCropImage").src = image.src;
+      $("#profileCropZoom").value = 1;
+      $("#profileCropEditor").hidden = false;
+      renderProfileCrop();
     } catch (error) {
       toast(error.message);
     }
+  };
+  $("#profileCropZoom").oninput = event => {
+    profileCrop.zoom = Number(event.target.value);
+    renderProfileCrop();
+  };
+  const cropViewport = $("#profileCropViewport");
+  cropViewport.onpointerdown = event => {
+    if (!profileCrop) return;
+    cropViewport.setPointerCapture(event.pointerId);
+    profileCrop.dragX = event.clientX;
+    profileCrop.dragY = event.clientY;
+  };
+  cropViewport.onpointermove = event => {
+    if (!profileCrop || !cropViewport.hasPointerCapture(event.pointerId)) return;
+    profileCrop.offsetX += event.clientX - profileCrop.dragX;
+    profileCrop.offsetY += event.clientY - profileCrop.dragY;
+    profileCrop.dragX = event.clientX;
+    profileCrop.dragY = event.clientY;
+    renderProfileCrop();
+  };
+  $("#confirmProfileCrop").onclick = confirmProfileCrop;
+  $("#cancelProfileCrop").onclick = () => {
+    $("#profileCropEditor").hidden = true;
+    profileCrop = null;
   };
   $("#profileForm").onsubmit = async event => {
     event.preventDefault();
