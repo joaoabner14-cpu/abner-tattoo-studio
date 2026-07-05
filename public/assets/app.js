@@ -883,12 +883,14 @@ function setupPullToRefresh() {
 let applicationStarted = false;
 
 function showLogin() {
+  try { localStorage.removeItem("studio_authenticated"); } catch {}
   document.body.classList.remove("auth-loading");
   document.body.classList.remove("authenticated");
   applicationStarted = false;
 }
 
 async function startApplication() {
+  try { localStorage.setItem("studio_authenticated", "1"); } catch {}
   document.body.classList.remove("auth-loading");
   document.body.classList.add("authenticated");
   if (applicationStarted) return;
