@@ -59,6 +59,7 @@ let managementData = null;
 let dashboardFinanceData = null;
 let profilePhotoData = "";
 let profileCrop = null;
+let marketingData = [];
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -320,6 +321,75 @@ async function loadStock() {
     $$("[data-stock-search]", $("#stockList")).forEach(card => {
       card.hidden = term && !card.dataset.stockSearch.includes(term);
     });
+  };
+}
+
+async function loadMarketing() {
+  marketingData = await api("/api/marketing");
+  const month = $("#marketingMonth")?.value || todaySp().slice(0, 7);
+  const status = $("#marketingStatus")?.value || "";
+  const filtered = marketingData.filter(item => {
+    const date = item.data_postagem || item.data_inicio || "";
+    return (!month || date.startsWith(month)) && (!status || item.status === status);
+  });
+  const planned = filtered.filter(item => ["Planejado", "Produção", "Agendado"].includes(item.status)).length;
+  const boosted = filtered.filter(item => item.impulsionar).length;
+  $("#marketingPanel").innerHTML = `<div class="marketing-toolbar">
+    <label>Mês<input id="marketingMonth" type="month" value="${month}"></label>
+    <label>Status<select id="marketingStatus"><option value="">Todos</option>${["Ideia","Planejado","Produção","Agendado","Publicado","Encerrado"].map(value => `<option ${value === status ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+  </div>
+  <div class="stats marketing-stats">
+    <div class="card stat"><span class="muted">Itens no mês</span><strong>${filtered.length}</strong></div>
+    <div class="card stat"><span class="muted">Em preparação</span><strong>${planned}</strong></div>
+    <div class="card stat"><span class="muted">Impulsionados</span><strong>${boosted}</strong></div>
+  </div>
+  <div class="marketing-list">${filtered.map(item => `<article class="card marketing-card">
+    <div class="card-head"><div><span class="badge">${escapeHtml(item.tipo)}</span><strong>${escapeHtml(item.titulo)}</strong></div><span class="badge">${escapeHtml(item.status)}</span></div>
+    <p>${escapeHtml(item.descricao || "Sem descrição.")}</p>
+    <div class="marketing-meta">
+      <span>Publicação: ${item.data_postagem ? `${dateBr(item.data_postagem)}${item.hora_postagem ? ` às ${item.hora_postagem}` : ""}` : "não definida"}</span>
+      <span>Canais: ${escapeHtml(item.plataformas || "não definidos")}</span>
+      ${item.impulsionar ? `<span>Impulsionamento: ${dateBr(item.impulsionamento_inicio)} a ${dateBr(item.impulsionamento_fim)} · ${money(item.orcamento)}</span>` : ""}
+    </div>
+    ${item.texto_postagem ? `<div class="marketing-caption">${escapeHtml(item.texto_postagem)}</div>` : ""}
+    <div class="card-actions">
+      ${item.texto_postagem ? `<button class="secondary copy-marketing-caption" data-id="${item.id}">Copiar legenda</button>` : ""}
+      <button class="secondary" data-marketing-action="edit" data-id="${item.id}">Editar</button>
+      <button class="danger delete-marketing" data-id="${item.id}">Excluir</button>
+    </div>
+  </article>`).join("") || `<div class="panel empty">Nenhum planejamento para este período.</div>`}</div>`;
+  $("#marketingMonth").onchange = loadMarketing;
+  $("#marketingStatus").onchange = loadMarketing;
+}
+
+function openMarketingPlan(itemId = "") {
+  const item = marketingData.find(entry => String(entry.id) === String(itemId)) || {};
+  $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} planejamento</h2><button class="close" type="button">×</button></header>
+    <form id="marketingForm">
+      <label>Título<input name="titulo" value="${escapeHtml(item.titulo)}" required></label>
+      <div class="fields"><label>Tipo<select name="tipo">${["Promoção","Evento","Postagem"].map(value => `<option ${value === item.tipo ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      <label>Status<select name="status">${["Ideia","Planejado","Produção","Agendado","Publicado","Encerrado"].map(value => `<option ${value === item.status ? "selected" : ""}>${value}</option>`).join("")}</select></label></div>
+      <label>Descrição da ação<textarea name="descricao">${escapeHtml(item.descricao)}</textarea></label>
+      <label>Oferta ou chamada principal<input name="oferta" value="${escapeHtml(item.oferta)}"></label>
+      <label>Redes sociais<input name="plataformas" placeholder="Instagram, Facebook, TikTok..." value="${escapeHtml(item.plataformas)}"></label>
+      <div class="fields"><label>Início da ação<input name="data_inicio" type="date" value="${item.data_inicio || ""}"></label><label>Fim da ação<input name="data_fim" type="date" value="${item.data_fim || ""}"></label></div>
+      <div class="fields"><label>Data da postagem<input name="data_postagem" type="date" value="${item.data_postagem || ""}"></label><label>Horário<input name="hora_postagem" type="time" value="${item.hora_postagem || ""}"></label></div>
+      <label>Legenda planejada<textarea name="texto_postagem" placeholder="Texto, chamada e hashtags...">${escapeHtml(item.texto_postagem)}</textarea></label>
+      <div class="fields"><label>Objetivo<input name="objetivo" placeholder="Alcance, agendamentos..." value="${escapeHtml(item.objetivo)}"></label><label>Público<input name="publico" value="${escapeHtml(item.publico)}"></label></div>
+      <label class="check-label"><input name="impulsionar" type="checkbox" value="1" ${item.impulsionar ? "checked" : ""}> Esta publicação será impulsionada</label>
+      <div class="fields"><label>Início do impulso<input name="impulsionamento_inicio" type="date" value="${item.impulsionamento_inicio || ""}"></label><label>Fim do impulso<input name="impulsionamento_fim" type="date" value="${item.impulsionamento_fim || ""}"></label></div>
+      <label>Orçamento do impulso<input name="orcamento" data-money inputmode="numeric" value="${item.orcamento ? moneyInput(item.orcamento) : ""}"></label>
+      <label>Observações<textarea name="observacoes">${escapeHtml(item.observacoes)}</textarea></label>
+      <button class="primary">Salvar planejamento</button>
+    </form>`;
+  applyInputMasks($("#actionContent"));
+  $("#actionDialog").showModal();
+  $("#marketingForm").onsubmit = async event => {
+    event.preventDefault();
+    await send(item.id ? `/api/marketing/${item.id}` : "/api/marketing", item.id ? "PUT" : "POST", event.currentTarget);
+    $("#actionDialog").close();
+    toast("Planejamento salvo.");
+    await loadMarketing();
   };
 }
 
@@ -891,7 +961,7 @@ document.addEventListener("input", event => {
 
 document.addEventListener("click", event => {
   const nav = event.target.closest(".nav-link");
-  if (nav) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") { loadFinance(); loadFinancialManagement(); } if (nav.dataset.page === "estoque") loadStock(); }
+  if (nav) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") { loadFinance(); loadFinancialManagement(); } if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); }
   if (event.target.closest("[data-open=appointment]")) openAppointment();
   if (event.target.closest("[data-open=client]")) openNewClient();
   if (event.target.closest(".close")) event.target.closest("dialog").close();
@@ -918,6 +988,21 @@ document.addEventListener("click", event => {
   if (serviceAction) openServiceAction(serviceAction.dataset.serviceAction);
   const stockAction = event.target.closest("[data-stock-action]");
   if (stockAction) openStockAction(stockAction.dataset.stockAction, stockAction.dataset.id);
+  const marketingAction = event.target.closest("[data-marketing-action]");
+  if (marketingAction) openMarketingPlan(marketingAction.dataset.id);
+  const marketingDelete = event.target.closest(".delete-marketing");
+  if (marketingDelete && confirm("Excluir este planejamento?")) {
+    api(`/api/marketing/${marketingDelete.dataset.id}`, { method: "DELETE" })
+      .then(() => { toast("Planejamento excluído."); loadMarketing(); })
+      .catch(error => toast(error.message));
+  }
+  const marketingCopy = event.target.closest(".copy-marketing-caption");
+  if (marketingCopy) {
+    const item = marketingData.find(entry => String(entry.id) === marketingCopy.dataset.id);
+    navigator.clipboard.writeText(item?.texto_postagem || "")
+      .then(() => toast("Legenda copiada."))
+      .catch(() => toast("Não foi possível copiar a legenda."));
+  }
   const managementAction = event.target.closest("[data-management-action]");
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
   const managementPayment = event.target.closest(".pay-management");

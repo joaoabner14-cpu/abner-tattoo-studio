@@ -1311,6 +1311,54 @@ async function authApi(db, request, url) {
 
 async function api(request, env, url) {
   const db = env.DB;
+  if (url.pathname === "/api/marketing" && request.method === "GET") {
+    const { results } = await db.prepare(`
+      SELECT * FROM planejamento_marketing
+      ORDER BY COALESCE(data_postagem,data_inicio,data_criacao) DESC,id DESC
+    `).all();
+    return json(results);
+  }
+  if (url.pathname === "/api/marketing" && request.method === "POST") {
+    const data = await body(request);
+    const created = await db.prepare(`
+      INSERT INTO planejamento_marketing
+        (titulo,tipo,descricao,oferta,plataformas,status,data_inicio,data_fim,
+          data_postagem,hora_postagem,texto_postagem,objetivo,publico,
+          impulsionar,impulsionamento_inicio,impulsionamento_fim,orcamento,observacoes)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(required(data.titulo, "título"), data.tipo || "Postagem",
+      data.descricao || "", data.oferta || "", data.plataformas || "",
+      data.status || "Ideia", data.data_inicio || null, data.data_fim || null,
+      data.data_postagem || null, data.hora_postagem || null,
+      data.texto_postagem || "", data.objetivo || "", data.publico || "",
+      data.impulsionar ? 1 : 0, data.impulsionamento_inicio || null,
+      data.impulsionamento_fim || null, number(data.orcamento), data.observacoes || "").run();
+    return json({ ok: true, id: created.meta.last_row_id }, 201);
+  }
+  const marketingMatch = url.pathname.match(/^\/api\/marketing\/(\d+)$/);
+  if (marketingMatch && request.method === "PUT") {
+    const data = await body(request);
+    await db.prepare(`
+      UPDATE planejamento_marketing SET titulo=?,tipo=?,descricao=?,oferta=?,
+        plataformas=?,status=?,data_inicio=?,data_fim=?,data_postagem=?,
+        hora_postagem=?,texto_postagem=?,objetivo=?,publico=?,impulsionar=?,
+        impulsionamento_inicio=?,impulsionamento_fim=?,orcamento=?,observacoes=?,
+        data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
+    `).bind(required(data.titulo, "título"), data.tipo || "Postagem",
+      data.descricao || "", data.oferta || "", data.plataformas || "",
+      data.status || "Ideia", data.data_inicio || null, data.data_fim || null,
+      data.data_postagem || null, data.hora_postagem || null,
+      data.texto_postagem || "", data.objetivo || "", data.publico || "",
+      data.impulsionar ? 1 : 0, data.impulsionamento_inicio || null,
+      data.impulsionamento_fim || null, number(data.orcamento),
+      data.observacoes || "", integer(marketingMatch[1])).run();
+    return json({ ok: true });
+  }
+  if (marketingMatch && request.method === "DELETE") {
+    await db.prepare("DELETE FROM planejamento_marketing WHERE id=?")
+      .bind(integer(marketingMatch[1])).run();
+    return json({ ok: true });
+  }
   if (url.pathname === "/api/perfil") {
     const user = await currentUser(db, request);
     if (!user) return error("Não autorizado.", 401);
