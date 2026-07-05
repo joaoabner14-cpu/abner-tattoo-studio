@@ -367,6 +367,7 @@ async function loadMarketing() {
 function openMarketingPlan(itemId = "") {
   const item = marketingData.find(entry => String(entry.id) === String(itemId)) || {};
   marketingArtData = "";
+  const selectedPlatforms = String(item.plataformas || "").split(",").map(value => value.trim());
   $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} planejamento</h2><button class="close" type="button">×</button></header>
     <form id="marketingForm">
       <label class="marketing-art-field">
@@ -379,7 +380,10 @@ function openMarketingPlan(itemId = "") {
       <label>Status<select name="status">${["Ideia","Planejado","Produção","Agendado","Publicado","Encerrado"].map(value => `<option ${value === item.status ? "selected" : ""}>${value}</option>`).join("")}</select></label></div>
       <label>Descrição da ação<textarea name="descricao">${escapeHtml(item.descricao)}</textarea></label>
       <label>Oferta ou chamada principal<input name="oferta" value="${escapeHtml(item.oferta)}"></label>
-      <label>Redes sociais<input name="plataformas" placeholder="Instagram, Facebook, TikTok..." value="${escapeHtml(item.plataformas)}"></label>
+      <fieldset class="platform-field"><legend>Redes sociais</legend>
+        <input name="plataformas" type="hidden" value="${escapeHtml(item.plataformas)}">
+        <div class="platform-options">${["Instagram","Facebook","TikTok","WhatsApp","Threads"].map(value => `<label><input type="checkbox" data-platform value="${value}" ${selectedPlatforms.includes(value) ? "checked" : ""}><span>${value}</span></label>`).join("")}</div>
+      </fieldset>
       <div class="fields"><label>Início da ação<input name="data_inicio" type="date" value="${item.data_inicio || ""}"></label><label>Fim da ação<input name="data_fim" type="date" value="${item.data_fim || ""}"></label></div>
       <div class="fields"><label>Data da postagem<input name="data_postagem" type="date" value="${item.data_postagem || ""}"></label><label>Horário<input name="hora_postagem" type="time" value="${item.hora_postagem || ""}"></label></div>
       <label>Legenda planejada<textarea name="texto_postagem" placeholder="Texto, chamada e hashtags...">${escapeHtml(item.texto_postagem)}</textarea></label>
@@ -413,6 +417,8 @@ function openMarketingPlan(itemId = "") {
   $("#marketingForm").onsubmit = async event => {
     event.preventDefault();
     const form = event.currentTarget;
+    form.elements.plataformas.value = $$("[data-platform]:checked", form)
+      .map(input => input.value).join(", ");
     form.elements.arte.disabled = true;
     const result = await send(item.id ? `/api/marketing/${item.id}` : "/api/marketing",
       item.id ? "PUT" : "POST", form);
