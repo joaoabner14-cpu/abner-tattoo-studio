@@ -797,22 +797,23 @@ $("#loginForm").onsubmit = async event => {
   event.preventDefault();
   $("#loginError").textContent = "";
 
-  const button = event.currentTarget.querySelector("button[type='submit']");
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type='submit']");
 
-  if (button) {
-    button.disabled = true;
-  }
+  if (button) button.disabled = true;
 
   try {
-    await send("/api/auth/login", "POST", event.currentTarget);
-    event.currentTarget.reset();
+    await send("/api/auth/login", "POST", form);
+
+    if (form) {
+      form.reset();
+    }
+
     await startApplication();
   } catch (error) {
     $("#loginError").textContent = error.message;
   } finally {
-    if (button) {
-      button.disabled = false;
-    }
+    if (button) button.disabled = false;
   }
 };
 
