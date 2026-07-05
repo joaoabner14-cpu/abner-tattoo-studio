@@ -11,11 +11,21 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.19/main.min.css">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
-<body>
+<body class="auth-loading">
   <div id="pullRefresh" class="pull-refresh" role="status" aria-live="polite" aria-hidden="true">
     <span class="pull-refresh-icon">↓</span>
     <span class="pull-refresh-text">Puxe para atualizar</span>
   </div>
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <img src="/assets/img/logo.png" alt="Abner Tattoo Studio" class="login-logo">
+      <div><span class="eyebrow">ÁREA RESTRITA</span><h1>Entrar no sistema</h1><p class="muted">Acesse a gestão do estúdio com segurança.</p></div>
+      <label>Usuário<input name="login" autocomplete="username" autocapitalize="none" required></label>
+      <label>Senha<input name="senha" type="password" autocomplete="current-password" required></label>
+      <button id="loginButton" class="primary" type="submit">Entrar</button>
+      <p id="loginError" class="login-error" role="alert"></p>
+    </form>
+  </section>
   <header class="topbar">
     <button class="icon-button" id="menuButton" aria-label="Abrir menu">☰</button>
     <img src="/assets/img/logo.png" alt="" class="logo">
@@ -25,6 +35,11 @@
     <button class="nav-link active" data-page="agenda">Agenda</button>
     <button class="nav-link" data-page="clientes">Clientes</button>
     <button class="nav-link" data-page="financeiro">Financeiro</button>
+    <button class="nav-link" data-page="estoque">Estoque</button>
+    <div class="sidebar-account">
+      <button class="nav-link" id="enablePasskey">Ativar Face ID / biometria</button>
+      <button class="nav-link" id="logoutButton">Sair</button>
+    </div>
   </aside>
   <main>
     <section id="agenda" class="page active">
@@ -36,7 +51,7 @@
       </div>
     </section>
     <section id="clientes" class="page">
-      <div class="page-title"><div><span class="eyebrow">CADASTRO</span><h1>Clientes</h1></div></div>
+      <div class="page-title"><div><span class="eyebrow">CADASTRO</span><h1>Clientes</h1></div><button class="primary" data-open="client">+ Novo cliente</button></div>
       <div class="client-grid">
         <div class="panel client-list-panel"><input id="clientSearch" placeholder="Pesquisar cliente..."><div id="clientList"></div></div>
         <div id="clientDetail" class="panel empty">Selecione um cliente</div>
@@ -46,22 +61,28 @@
       <div class="page-title"><div><span class="eyebrow">CONTROLE</span><h1>Financeiro</h1></div></div>
       <div id="fullFinancePanel"></div>
     </section>
+    <section id="estoque" class="page">
+      <div class="page-title"><div><span class="eyebrow">CONTROLE</span><h1>Estoque</h1></div><button class="primary" data-stock-action="new">+ Novo material</button></div>
+      <div id="stockPanel"></div>
+    </section>
   </main>
 
   <dialog id="appointmentDialog">
     <form id="appointmentForm">
       <header><h2>Novo agendamento</h2><button type="button" class="close">×</button></header>
       <input type="hidden" name="id_cliente"><label>Nome<input name="nome" autocomplete="off" required><div id="clientSuggestions"></div></label>
-      <label>Telefone<input name="telefone" required></label>
+      <label>Telefone<input name="telefone" type="tel" inputmode="tel" autocomplete="tel" required></label>
       <div class="fields"><label>Data<input type="date" name="data" required></label><label>Horário<input type="time" name="hora" required></label></div>
-      <div class="fields"><label>Valor orçado<input type="number" step=".01" name="valor"></label><label>Sinal<input type="number" step=".01" name="sinal"></label></div>
+      <div class="fields"><label>Valor orçado<input type="text" inputmode="numeric" data-money name="valor"></label><label>Sinal<input type="text" inputmode="numeric" data-money name="sinal"></label></div>
       <footer><button type="button" class="secondary close">Cancelar</button><button class="primary">Salvar</button></footer>
     </form>
   </dialog>
 
   <dialog id="orderDialog"><div id="orderContent"></div></dialog>
+  <dialog id="actionDialog"><div id="actionContent"></div></dialog>
   <div id="toast" role="status"></div>
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.19/index.global.min.js"></script>
+  <script src="/assets/simplewebauthn.min.js"></script>
   <script type="module" src="/assets/app.js"></script>
 </body>
 </html>
