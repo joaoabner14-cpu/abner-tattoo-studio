@@ -538,6 +538,13 @@ async function openOrder(appointmentId) {
   activeOrderData = data;
   const [date, time] = data.data_hora.split(" ");
   const today = todaySp();
+  const appointmentStatuses = [
+    ["Agendado", "Agendado"],
+    ["Confirmado", "Confirmado"],
+    ["Concluido", "Finalizado"],
+    ["Cancelado", "Cancelado"],
+    ["Remarcado", "Remarcado"]
+  ];
   const installmentHtml = data.parcelas.length ? `<div class="installment-list">${data.parcelas.map(item => {
     const late = item.status !== "Pago" && item.data_vencimento < today;
     const status = item.status === "Pago" ? "Pago" : late ? "Atrasado" : "Pendente";
@@ -593,7 +600,7 @@ async function openOrder(appointmentId) {
       <h2>Receitas de tintas</h2>${inkRecipeHtml}
       <h2>Outros materiais utilizados</h2>${materialHtml}
     </div>
-    <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${["Agendado","Confirmado","Em Atendimento","Finalizado","Cancelado","Remarcado"].map(x => `<option ${x === data.status_agendamento ? "selected" : ""}>${x}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
+    <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${appointmentStatuses.map(([value, label]) => `<option value="${value}" ${value === data.status_agendamento ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
     <div class="tab-pane" id="os-finance"><div class="stats"><div class="card stat">Valor final<strong>${money(data.valor_final)}</strong></div><div class="card stat">Total pago<strong>${money(data.total_pago)}</strong></div><div class="card stat">Saldo aberto<strong>${money(data.saldo_aberto)}</strong></div></div>
       <div class="finance-actions"><button class="primary" type="button" data-finance-action="payment">Registrar pagamento</button>
       ${!data.parcelas.length && data.saldo_aberto > 0 ? `<button class="secondary" type="button" data-finance-action="credit">Criar crediário</button>` : ""}

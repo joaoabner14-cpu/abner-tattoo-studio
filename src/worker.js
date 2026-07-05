@@ -1153,8 +1153,11 @@ async function api(request, env, url) {
   if (request.method === "POST" && url.pathname === "/api/agendamentos") return createAppointment(db, request);
   if (request.method === "PUT" && /^\/api\/agendamentos\/\d+$/.test(url.pathname)) {
     const data = await body(request);
+    const status = data.status === "Finalizado" ? "Concluido" : data.status;
+    const allowedStatuses = ["Agendado", "Confirmado", "Concluido", "Cancelado", "Remarcado"];
+    if (!allowedStatuses.includes(status)) return error("Status de agendamento inválido.", 400);
     await db.prepare("UPDATE agendamentos SET data_hora=?,status=? WHERE id=?")
-      .bind(`${data.data} ${data.hora}:00`, data.status, integer(url.pathname.split("/").pop())).run();
+      .bind(`${data.data} ${data.hora}:00`, status, integer(url.pathname.split("/").pop())).run();
     return json({ ok: true });
   }
   if (request.method === "GET" && url.pathname === "/api/os") return openOrder(db, url);
