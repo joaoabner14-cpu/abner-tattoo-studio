@@ -84,4 +84,4 @@
 @media(max-width:800px){.management-period{flex-direction:column}}
 .home-finance-stats .income strong{color:var(--green)}.home-finance-stats .expense strong{color:var(--red)}
 @media(max-width:800px){.home-finance-stats{grid-template-columns:1fr 1fr;gap:8px}.home-finance-stats .stat{padding:14px}.home-finance-stats .stat strong{font-size:20px}}
-.account-button{display:grid;place-items:center;width:42px;height:42px;margin-left:auto;border:1px solid var(--line);border-radius:50%;background:var(--surface2);font-size:19px}#profileForm>button{width:100%;margin-top:4px}
+.account-button{display:grid;place-items:center;width:42px;height:42px;margin-left:auto;border:1px solid var(--line);border-radius:50%;background:var(--surface2);font-size:19px}#profileForm>button,#passwordForm>button{width:100%;margin-top:4px}.profile-password{margin-top:24px;padding-top:4px;border-top:1px solid var(--line)}.profile-password h2{margin-top:20px}

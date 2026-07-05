@@ -500,7 +500,15 @@ async function openProfile() {
       <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(profile.cnpj)}"></label>
       <label>Instagram<input name="instagram" placeholder="@usuario" value="${escapeHtml(profile.instagram)}"></label>
       <button class="primary">Salvar informações</button>
-    </form>`;
+    </form>
+    <div class="profile-password">
+      <h2>Atualizar senha</h2>
+      <form id="passwordForm">
+        <label>Nova senha<input name="nova_senha" type="password" minlength="8" autocomplete="new-password" required></label>
+        <label>Repita a nova senha<input name="confirmar_senha" type="password" minlength="8" autocomplete="new-password" required></label>
+        <button class="primary">Atualizar senha</button>
+      </form>
+    </div>`;
   applyInputMasks($("#actionContent"));
   $("#actionDialog").showModal();
   $("#profileForm").onsubmit = async event => {
@@ -508,6 +516,20 @@ async function openProfile() {
     await send("/api/perfil", "PUT", event.currentTarget);
     $("#actionDialog").close();
     toast("Perfil atualizado.");
+  };
+  $("#passwordForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (form.elements.nova_senha.value !== form.elements.confirmar_senha.value) {
+      return toast("As senhas informadas não são iguais.");
+    }
+    try {
+      await send("/api/perfil/senha", "PUT", form);
+      form.reset();
+      toast("Senha atualizada.");
+    } catch (error) {
+      toast(error.message);
+    }
   };
 }
 

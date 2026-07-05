@@ -1335,6 +1335,27 @@ async function api(request, env, url) {
       return json({ ok: true });
     }
   }
+  if (url.pathname === "/api/perfil/senha" && request.method === "PUT") {
+    const user = await currentUser(db, request);
+    if (!user) return error("Não autorizado.", 401);
+    const data = await body(request);
+    const password = String(data.nova_senha || "");
+    if (password.length < 8) return error("A nova senha deve ter pelo menos 8 caracteres.");
+    if (password !== String(data.confirmar_senha || "")) {
+      return error("As senhas informadas não são iguais.");
+    }
+    const iterations = 310000;
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const hash = await derivePassword(password, salt, iterations);
+    await db.batch([
+      db.prepare(`
+        UPDATE usuarios SET senha_salt=?,senha_hash=?,senha_iteracoes=? WHERE id=?
+      `).bind(bytesToBase64(salt), bytesToBase64(hash), iterations, user.id),
+      db.prepare("UPDATE sessoes SET revogada=1 WHERE id_usuario=? AND id<>?")
+        .bind(user.id, user.id_sessao)
+    ]);
+    return json({ ok: true });
+  }
   const clientResponse = await clients(db, request, url);
   if (clientResponse) return clientResponse;
   const stockResponse = await stock(db, request, url);
