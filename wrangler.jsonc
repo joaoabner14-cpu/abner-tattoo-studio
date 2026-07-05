@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "abner-tattoo-studio",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-07-04",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "abner-tattoo-studio",
+      "database_id": "b4380570-9b98-4743-8bad-b709c90789e5",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
