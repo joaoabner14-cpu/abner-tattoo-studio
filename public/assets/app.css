@@ -31,7 +31,7 @@
   .client-order-footer{flex-direction:column}.client-order-footer .muted{text-align:left}.financial-movement{align-items:flex-start}.material-card{align-items:flex-start}.material-form{padding:14px}
   .finance-actions{grid-template-columns:1fr}.finance-actions button{width:100%}.finance-event{align-items:start}.finance-event>strong{white-space:nowrap}
   .stock-toolbar{align-items:stretch;flex-direction:column}.stock-toolbar>*{width:100%;max-width:none!important}.stock-grid{grid-template-columns:1fr}.stock-card-head>div{align-items:flex-start;flex-direction:column}.stock-card .card-actions{width:100%}.stock-card .card-actions>*{flex:1}.stock-event{align-items:start;padding:13px 12px}.stock-event>strong{font-size:12px}
-  .management-period{justify-content:stretch}.management-period label{width:100%}.management-stats{grid-template-columns:1fr 1fr}.management-actions{grid-template-columns:1fr 1fr}.management-columns{grid-template-columns:1fr}.management-pending{align-items:stretch;flex-direction:column}.management-pending>div:last-child{justify-content:space-between}.management-event{align-items:start;padding:13px 12px}.management-event>strong{font-size:12px}.mei-card>.card-head{align-items:flex-start;flex-direction:column}.mei-card>.card-head>strong{text-align:left}
+  .management-period{justify-content:stretch}.management-period label{width:100%}.management-stats{grid-template-columns:1fr 1fr;gap:8px}.management-stats .stat{padding:14px}.management-stats .stat strong{font-size:20px}.management-actions{grid-template-columns:1fr 1fr}.management-columns{grid-template-columns:1fr}.management-pending{align-items:stretch;flex-direction:column}.management-pending>div:last-child{justify-content:space-between}.management-event{align-items:start;padding:13px 12px}.management-event>strong{font-size:12px}.mei-card>.card-head{align-items:flex-start;flex-direction:column}.mei-card>.card-head>strong{text-align:left}
   .ink-row{grid-template-columns:minmax(0,1fr) 82px 42px}.ink-recipe-card .card-head{align-items:flex-start}.ink-recipe-card .danger{padding:8px 10px}
   .expiry-alerts{grid-template-columns:1fr}.expiry-alert{align-items:flex-start;flex-direction:column}.expiry-alert>strong{white-space:normal}
   .fields{grid-template-columns:minmax(0,1fr);gap:0}
@@ -74,7 +74,7 @@
   #estoque .page-title{flex-direction:row;align-items:flex-end;gap:10px}
   #estoque .page-title>div{min-width:0}
   #estoque .page-title .primary{width:auto;min-height:40px;padding:9px 11px;flex:0 0 auto;font-size:12px;white-space:nowrap}
-  .management-stats,.management-actions{grid-template-columns:1fr}
+  .management-actions{grid-template-columns:1fr}
   .appointment-main{display:grid;grid-template-columns:minmax(0,1fr) auto}.appointment-name{white-space:normal;overflow-wrap:anywhere}
   .fc .fc-toolbar{justify-content:center}.fc .fc-toolbar-chunk:nth-child(2){width:100%;justify-content:center;order:-1}
 }
