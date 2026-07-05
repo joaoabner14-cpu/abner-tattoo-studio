@@ -358,6 +358,7 @@ async function loadClient(id) {
   applyInputMasks($("#clientDetail"));
   $("#clientForm").addEventListener("submit", async event => {
     event.preventDefault();
+    if (!confirm("Confirmar a atualização do cadastro deste cliente?")) return;
     await send(`/api/clientes/${id}`, "PUT", event.currentTarget);
     $("#clientSearch").value = event.currentTarget.elements.nome.value;
     $("#clientList").innerHTML = "";
