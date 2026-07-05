@@ -26,7 +26,7 @@
   .panel{padding:16px}.card{padding:16px;margin-bottom:12px}.card-head{align-items:center}
   .dashboard-grid{gap:20px}.dashboard-grid h2{margin-top:18px}
   .appointment-group{padding:16px}.appointment-main{min-height:48px;align-items:flex-start}.appointment-person{flex-wrap:wrap;line-height:1.4}.appointment-main>.badge{flex:0 0 auto;margin-top:1px}.appointment-confirm{width:100%;min-height:46px;margin-top:8px}
-  .stats{gap:10px}.stat{min-width:0;padding:16px}.stat strong{overflow-wrap:anywhere;font-size:22px}
+  .stats{gap:10px}.stat{min-width:0;padding:16px}.stat strong{overflow-wrap:anywhere;font-size:22px}#estoque .stats{grid-template-columns:1fr 1fr;gap:8px}#estoque .stats .stat{padding:14px}#estoque .stats .stat strong{font-size:20px}
   .overdue-card{align-items:stretch;flex-direction:column}.overdue-card .card-actions{width:100%}.overdue-card .card-actions>*{flex:1;text-align:center}.installment-card{align-items:flex-start}.installment-state{flex-direction:column;align-items:flex-end}.pay-installment{min-height:38px;padding:8px 11px}
   .client-order-footer{flex-direction:column}.client-order-footer .muted{text-align:left}.financial-movement{align-items:flex-start}.material-card{align-items:flex-start}.material-form{padding:14px}
   .finance-actions{grid-template-columns:1fr}.finance-actions button{width:100%}.finance-event{align-items:start}.finance-event>strong{white-space:nowrap}
