@@ -1,7 +1,12 @@
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" }
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "private, no-store, max-age=0",
+      "pragma": "no-cache",
+      "vary": "Cookie"
+    }
   });
 
 const error = (message, status = 400) => json({ error: message }, status);
@@ -1723,7 +1728,12 @@ async function createSession(db, request, userId) {
 }
 
 const authResponse = (data, status = 200, cookie = null) => {
-  const headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+  const headers = new Headers({
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "private, no-store, max-age=0",
+    "pragma": "no-cache",
+    "vary": "Cookie"
+  });
   if (cookie) headers.set("set-cookie", cookie);
   return new Response(JSON.stringify(data), { status, headers });
 };
@@ -1768,8 +1778,10 @@ async function authApi(db, request, url) {
   if (path === "/api/auth/logout" && request.method === "POST") {
     if (user) await db.prepare("UPDATE sessoes SET revogada=1 WHERE id=?").bind(user.id_sessao).run();
     const secure = url.protocol === "https:" ? "; Secure" : "";
-    return authResponse({ ok: true }, 200,
+    const response = authResponse({ ok: true }, 200,
       `studio_session=; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=0`);
+    response.headers.set("clear-site-data", "\"cache\"");
+    return response;
   }
   if (path.startsWith("/api/auth/passkey")) {
     return authResponse({ error: "Rota de autenticação não encontrada." }, 404);
@@ -1929,7 +1941,12 @@ async function api(request, env, url, user) {
       ).bind(id).first();
       if (!photo) return error("Foto não encontrada.", 404);
       return new Response(base64ToBytes(photo.dados_base64), {
-        headers: { "content-type": photo.mime_type, "cache-control": "private, max-age=3600" }
+        headers: {
+          "content-type": photo.mime_type,
+          "cache-control": "private, no-store, max-age=0",
+          "pragma": "no-cache",
+          "vary": "Cookie"
+        }
       });
     }
     if (request.method === "POST") {
@@ -1952,11 +1969,12 @@ async function api(request, env, url, user) {
   const crmOrderMatch = url.pathname.match(/^\/api\/crm\/os\/(\d+)$/);
   if (crmOrderMatch && request.method === "PUT") {
     const data = await body(request);
-    await db.prepare(`
+    const result = await db.prepare(`
       UPDATE ordem_servico SET regiao_corpo=?,tempo_sessao_minutos=?
       WHERE id=? AND id_estudio=?
     `).bind(data.regiao_corpo || "", integer(data.tempo_sessao_minutos),
       integer(crmOrderMatch[1]), studioId).run();
+    if (!result.meta.changes) return error("Ordem de serviço não encontrada.", 404);
     return json({ ok: true });
   }
   if (url.pathname === "/api/notificacoes" && request.method === "GET") {
@@ -2106,7 +2124,7 @@ async function api(request, env, url, user) {
   const marketingMatch = url.pathname.match(/^\/api\/marketing\/(\d+)$/);
   if (marketingMatch && request.method === "PUT") {
     const data = await body(request);
-    await db.prepare(`
+    const result = await db.prepare(`
       UPDATE planejamento_marketing SET titulo=?,tipo=?,descricao=?,oferta=?,
         plataformas=?,status=?,data_inicio=?,data_fim=?,data_postagem=?,
         hora_postagem=?,texto_postagem=?,objetivo=?,publico=?,impulsionar=?,
@@ -2120,6 +2138,7 @@ async function api(request, env, url, user) {
       data.impulsionar ? 1 : 0, data.impulsionamento_inicio || null,
       data.impulsionamento_fim || null, number(data.orcamento),
       data.observacoes || "", integer(marketingMatch[1]), studioId).run();
+    if (!result.meta.changes) return error("Planejamento não encontrado.", 404);
     return json({ ok: true });
   }
   if (marketingMatch && request.method === "DELETE") {

@@ -1,7 +1,13 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const api = async (path, options = {}) => {
-  const response = await fetch(path, options);
+  const requestOptions = {
+    cache: "no-store", credentials: "same-origin", ...options
+  };
+  if (!path.startsWith("/api/auth/") && !requestOptions.signal) {
+    requestOptions.signal = sessionAbortController.signal;
+  }
+  const response = await fetch(path, requestOptions);
   const data = await response.json();
   if (response.status === 401 && !path.startsWith("/api/auth/")) showLogin();
   if (!response.ok) throw new Error(data.error || "Não foi possível concluir.");
@@ -81,6 +87,8 @@ let marketingOpportunities = [];
 let notificationsData = [];
 let sessionUser = null;
 let studiosData = [];
+let pullRefreshSetup = false;
+let sessionAbortController = new AbortController();
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -1565,6 +1573,8 @@ $("#clientSuggestions").onclick = event => {
 
 function setupPullToRefresh() {
   if (!window.matchMedia("(max-width: 800px)").matches) return;
+  if (pullRefreshSetup) return;
+  pullRefreshSetup = true;
 
   const indicator = $("#pullRefresh");
   const icon = $(".pull-refresh-icon", indicator);
@@ -1644,8 +1654,52 @@ function setupPullToRefresh() {
 
 let applicationStarted = false;
 
+function clearApplicationState() {
+  sessionAbortController.abort();
+  sessionAbortController = new AbortController();
+  calendar?.destroy();
+  calendar = null;
+  selectedClientId = null;
+  activeOrderData = null;
+  clientSearchRequest++;
+  stockData = null;
+  managementData = null;
+  dashboardFinanceData = null;
+  profilePhotoData = "";
+  profileCrop = null;
+  marketingData = [];
+  marketingArtData = "";
+  marketingOpportunities = [];
+  notificationsData = [];
+  studiosData = [];
+  $$("dialog[open]").forEach(dialog => dialog.close());
+  $("#appointmentForm")?.reset();
+  $("#orderContent").replaceChildren();
+  $("#actionContent").replaceChildren();
+  $("#clientSearch").value = "";
+  $("#clientList").innerHTML = `<p class="muted client-search-hint">Digite para localizar um cliente.</p>`;
+  $("#clientDetail").className = "panel empty";
+  $("#clientDetail").textContent = "Selecione um cliente";
+  ["appointmentList", "financePanel", "fullFinancePanel", "stockPanel",
+    "marketingPanel", "privacyPanel", "studiosPanel"].forEach(id => {
+    $(`#${id}`)?.replaceChildren();
+  });
+  $("#calendar").replaceChildren();
+  $("#notificationBadge").hidden = true;
+  $("#notificationBadge").textContent = "0";
+  displayAccountPhoto("");
+  $("#studioName").textContent = "Gestão do estúdio";
+  $("#adminStudiosNav").hidden = true;
+  $$(".nav-link,.page").forEach(element => element.classList.remove("active"));
+  $(`.nav-link[data-page="agenda"]`)?.classList.add("active");
+  $("#agenda").classList.add("active");
+  $("#sidebar").classList.remove("open");
+  try { sessionStorage.removeItem("activePage"); } catch {}
+}
+
 function showLogin() {
   try { localStorage.removeItem("studio_authenticated"); } catch {}
+  clearApplicationState();
   document.body.classList.remove("auth-loading");
   document.body.classList.remove("authenticated");
   applicationStarted = false;
@@ -1653,6 +1707,10 @@ function showLogin() {
 }
 
 async function startApplication(user) {
+  if (sessionUser && String(sessionUser.id_estudio) !== String(user?.id_estudio)) {
+    clearApplicationState();
+    applicationStarted = false;
+  }
   sessionUser = user || sessionUser;
   if (sessionUser) {
     $("#studioName").textContent = sessionUser.nome_estudio || "Gestão do estúdio";
@@ -1713,9 +1771,11 @@ $("#loginForm").onsubmit = async event => {
 };
 
 $("#logoutButton").onclick = async () => {
-  await post("/api/auth/logout");
-  $("#sidebar").classList.remove("open");
-  showLogin();
+  try {
+    await post("/api/auth/logout");
+  } finally {
+    showLogin();
+  }
 };
 
 window.addEventListener("resize", () => {
