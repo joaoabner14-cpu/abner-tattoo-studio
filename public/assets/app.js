@@ -1499,8 +1499,12 @@ document.addEventListener("click", event => {
   if (event.target.closest(".close")) event.target.closest("dialog").close();
   const client = event.target.closest(".select-client");
   if (client) {
-    $("#clientSearch").value = client.dataset.name;
-    $("#clientList").innerHTML = "";
+    const desktopList = window.matchMedia("(min-width: 801px)").matches;
+    $$(".select-client").forEach(item => item.classList.toggle("active", item === client));
+    if (!desktopList) {
+      $("#clientSearch").value = client.dataset.name;
+      $("#clientList").innerHTML = "";
+    }
     loadClient(client.dataset.id);
   }
   const clientExport = event.target.closest(".export-client-data");
