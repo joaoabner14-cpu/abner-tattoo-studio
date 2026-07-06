@@ -1133,6 +1133,30 @@ function displayAccountPhoto(photo) {
     : `<span aria-hidden="true">👤</span>`;
 }
 
+async function openWhatsAppSummaryPreview() {
+  const data = await api("/api/perfil/resumo-whatsapp");
+  const history = data.historico.map(item => `<div class="whatsapp-history-row">
+    <strong>${dateBr(item.data_referencia)}</strong>
+    <span class="badge">${escapeHtml(item.status)}</span>
+    <small>${escapeHtml(item.telefone)}${item.data_envio ? ` · ${dateBr(item.data_envio)}` : ""}</small>
+  </div>`).join("") || `<p class="muted">Nenhum envio registrado.</p>`;
+  $("#actionContent").innerHTML = `<header><h2>Resumo diário do WhatsApp</h2><button class="close" type="button">×</button></header>
+    <div class="card whatsapp-integration-status">
+      <strong>${data.integracao_configurada ? "Integração configurada" : "Aguardando configuração da API da Meta"}</strong>
+      <small>${data.integracao_configurada
+        ? "Os envios ocorrerão no horário definido no perfil."
+        : "Esta é uma prévia. Nenhuma mensagem será enviada enquanto as credenciais não forem configuradas."}</small>
+    </div>
+    <pre class="whatsapp-summary-preview">${escapeHtml(data.texto)}</pre>
+    <div class="stats whatsapp-summary-stats">
+      <div class="card stat"><span class="muted">Atrasadas</span><strong>${data.parcelas_atrasadas.length}</strong></div>
+      <div class="card stat"><span class="muted">Hoje</span><strong>${data.agendamentos_hoje.length}</strong></div>
+      <div class="card stat"><span class="muted">Amanhã</span><strong>${data.agendamentos_amanha.length}</strong></div>
+    </div>
+    <h2>Histórico de envios</h2><div class="whatsapp-history">${history}</div>`;
+  $("#actionDialog").showModal();
+}
+
 async function openProfile() {
   const profile = await api("/api/perfil");
   profilePhotoData = profile.foto_perfil || "";
@@ -1154,6 +1178,13 @@ async function openProfile() {
       <label>Endereço<input name="endereco" value="${escapeHtml(profile.endereco)}"></label>
       <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(profile.cnpj)}"></label>
       <label>Instagram<input name="instagram" placeholder="@usuario" value="${escapeHtml(profile.instagram)}"></label>
+      <fieldset class="platform-field whatsapp-settings">
+        <legend>Alertas pelo WhatsApp</legend>
+        <label>Número para receber os alertas<input name="whatsapp_alertas" type="tel" inputmode="tel" placeholder="(12) 99999-9999" value="${escapeHtml(profile.whatsapp_alertas || "")}"></label>
+        <label>Horário do resumo diário<input name="horario_resumo_whatsapp" type="time" value="${escapeHtml(profile.horario_resumo_whatsapp || "08:00")}"></label>
+        <label class="check-label"><input name="alertas_whatsapp_ativos" type="checkbox" value="1" ${profile.alertas_whatsapp_ativos ? "checked" : ""}> Ativar envio automático quando a API estiver configurada</label>
+        <button class="secondary" id="previewWhatsAppSummary" type="button">Visualizar resumo de hoje</button>
+      </fieldset>
       <label>E-mail de privacidade<input name="email_privacidade" type="email" value="${escapeHtml(profile.email_privacidade)}" required><small class="muted">Canal para solicitações dos titulares de dados.</small></label>
       <label>Retenção de dados em anos<input name="prazo_retencao_anos" type="number" min="0" step="1" value="${profile.prazo_retencao_anos || ""}" placeholder="Não configurado"><small class="muted">Defina conforme a política geral do estúdio.</small></label>
       <button class="primary">Salvar informações</button>
@@ -1200,6 +1231,8 @@ async function openProfile() {
     renderProfileCrop();
   };
   $("#confirmProfileCrop").onclick = confirmProfileCrop;
+  $("#previewWhatsAppSummary").onclick = () =>
+    openWhatsAppSummaryPreview().catch(error => toast(error.message));
   $("#cancelProfileCrop").onclick = () => {
     $("#profileCropEditor").hidden = true;
     profileCrop = null;

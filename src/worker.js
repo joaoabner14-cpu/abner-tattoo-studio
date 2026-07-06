@@ -41,6 +41,12 @@ function saoPauloDate(offsetDays = 0) {
   }).format(now);
 }
 
+function saoPauloHour() {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23"
+  }).format(new Date());
+}
+
 function nthWeekday(year, month, weekday, occurrence) {
   const first = new Date(Date.UTC(year, month - 1, 1));
   const day = 1 + (7 + weekday - first.getUTCDay()) % 7 + (occurrence - 1) * 7;
@@ -112,6 +118,109 @@ const whatsappPhone = value => {
   const phone = String(value || "").replace(/\D/g, "");
   return phone.startsWith("55") ? phone : `55${phone}`;
 };
+
+async function dailyWhatsAppSummary(db, studioId, date = saoPauloDate()) {
+  const tomorrow = addDays(date, 1);
+  const { results: overdue } = await db.prepare(`
+    SELECT c.nome,cr.numero_parcela,cr.valor_parcela,cr.data_vencimento
+    FROM crediario cr
+    JOIN financeiro f ON f.id=cr.id_financeiro
+    JOIN clientes c ON c.id=f.id_cliente
+    LEFT JOIN ordem_servico os ON os.id=f.id_os
+    LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+    WHERE f.id_estudio=? AND cr.status IN ('Pendente','Atrasado')
+      AND cr.data_vencimento<? AND (a.id IS NULL OR a.status<>'Cancelado')
+    ORDER BY cr.data_vencimento,cr.numero_parcela
+  `).bind(studioId, date).all();
+  const { results: appointments } = await db.prepare(`
+    SELECT a.id,a.data_hora,a.status,c.nome,c.telefone
+    FROM agendamentos a JOIN clientes c ON c.id=a.id_cliente
+    WHERE a.id_estudio=? AND substr(a.data_hora,1,10) IN (?,?)
+      AND lower(a.status)<>'cancelado'
+    ORDER BY a.data_hora
+  `).bind(studioId, date, tomorrow).all();
+  const todayAppointments = appointments.filter(item => item.data_hora.slice(0, 10) === date);
+  const tomorrowAppointments = appointments.filter(item => item.data_hora.slice(0, 10) === tomorrow);
+  const totalOverdue = overdue.reduce((sum, item) => sum + Number(item.valor_parcela || 0), 0);
+  const lines = [
+    `Resumo do estúdio · ${brDateTime(date)}`,
+    "",
+    `Parcelas atrasadas: ${overdue.length} · ${new Intl.NumberFormat("pt-BR", {
+      style: "currency", currency: "BRL"
+    }).format(totalOverdue)}`,
+    `Agendamentos de hoje: ${todayAppointments.length}`,
+    ...todayAppointments.map(item =>
+      `• ${item.data_hora.slice(11, 16)} · ${item.nome}`),
+    `Agendamentos de amanhã: ${tomorrowAppointments.length}`,
+    ...tomorrowAppointments.map(item =>
+      `• ${item.data_hora.slice(11, 16)} · ${item.nome}`)
+  ];
+  return {
+    data: date, amanha: tomorrow, parcelas_atrasadas: overdue,
+    agendamentos_hoje: todayAppointments, agendamentos_amanha: tomorrowAppointments,
+    total_atrasado: totalOverdue, texto: lines.join("\n")
+  };
+}
+
+async function sendDailyWhatsAppSummaries(env) {
+  if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID ||
+    !env.WHATSAPP_TEMPLATE_NAME) return;
+  const date = saoPauloDate();
+  const hour = saoPauloHour();
+  const { results: studios } = await env.DB.prepare(`
+    SELECT id,whatsapp_alertas FROM estudios
+    WHERE ativo=1 AND alertas_whatsapp_ativos=1 AND whatsapp_alertas<>''
+      AND substr(horario_resumo_whatsapp,1,2)=?
+  `).bind(hour).all();
+  for (const studio of studios) {
+    const existing = await env.DB.prepare(`
+      SELECT id FROM whatsapp_resumos WHERE id_estudio=? AND data_referencia=?
+    `).bind(studio.id, date).first();
+    if (existing) continue;
+    const summary = await dailyWhatsAppSummary(env.DB, studio.id, date);
+    const inserted = await env.DB.prepare(`
+      INSERT INTO whatsapp_resumos
+        (id_estudio,data_referencia,telefone,conteudo,status)
+      VALUES(?,?,?,?,'Pendente')
+    `).bind(studio.id, date, whatsappPhone(studio.whatsapp_alertas),
+      summary.texto).run();
+    try {
+      const response = await fetch(
+        `https://graph.facebook.com/v23.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: whatsappPhone(studio.whatsapp_alertas),
+            type: "template",
+            template: {
+              name: env.WHATSAPP_TEMPLATE_NAME,
+              language: { code: "pt_BR" },
+              components: [{
+                type: "body",
+                parameters: [{ type: "text", text: summary.texto }]
+              }]
+            }
+          })
+        });
+      const result = await response.text();
+      await env.DB.prepare(`
+        UPDATE whatsapp_resumos SET status=?,resposta=?,data_envio=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).bind(response.ok ? "Enviado" : "Erro", result.slice(0, 2000),
+        inserted.meta.last_row_id).run();
+    } catch (cause) {
+      await env.DB.prepare(`
+        UPDATE whatsapp_resumos SET status='Erro',resposta=? WHERE id=?
+      `).bind(String(cause.message || cause).slice(0, 2000),
+        inserted.meta.last_row_id).run();
+    }
+  }
+}
 
 async function listAppointments(db, url, studioId, studioName, enabledModules) {
   const { results } = await db.prepare(`
@@ -2446,16 +2555,36 @@ async function api(request, env, url, user) {
         db.prepare(`
           UPDATE estudios SET nome_estudio=?,nome_responsavel=?,endereco=?,cnpj=?,
             instagram=?,email_privacidade=?,prazo_retencao_anos=?,
+            whatsapp_alertas=?,alertas_whatsapp_ativos=?,horario_resumo_whatsapp=?,
             data_atualizacao=CURRENT_TIMESTAMP
           WHERE id=?
         `).bind(required(data.nome_estudio, "nome do estúdio"),
           required(data.nome, "nome"), data.endereco || "",
           String(data.cnpj || "").replace(/\D/g, ""), data.instagram || "",
           emailAddress(data.email_privacidade),
-          Math.max(0, integer(data.prazo_retencao_anos)), studioId)
+          Math.max(0, integer(data.prazo_retencao_anos)),
+          String(data.whatsapp_alertas || "").replace(/\D/g, ""),
+          data.alertas_whatsapp_ativos === true ||
+            data.alertas_whatsapp_ativos === "1" ? 1 : 0,
+          /^\d{2}:\d{2}$/.test(String(data.horario_resumo_whatsapp || ""))
+            ? data.horario_resumo_whatsapp : "08:00",
+          studioId)
       ]);
       return json({ ok: true });
     }
+  }
+  if (url.pathname === "/api/perfil/resumo-whatsapp" && request.method === "GET") {
+    const resumo = await dailyWhatsAppSummary(db, studioId);
+    const { results: historico } = await db.prepare(`
+      SELECT data_referencia,telefone,status,data_criacao,data_envio
+      FROM whatsapp_resumos WHERE id_estudio=?
+      ORDER BY data_referencia DESC,id DESC LIMIT 30
+    `).bind(studioId).all();
+    return json({
+      ...resumo, historico,
+      integracao_configurada: Boolean(env.WHATSAPP_ACCESS_TOKEN &&
+        env.WHATSAPP_PHONE_NUMBER_ID && env.WHATSAPP_TEMPLATE_NAME)
+    });
   }
   if (url.pathname === "/api/perfil/senha" && request.method === "PUT") {
     const data = await body(request);
@@ -2653,5 +2782,8 @@ export default {
       console.error(cause);
       return error(cause.message || "Erro interno.", 500);
     }
+  },
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(sendDailyWhatsAppSummaries(env));
   }
 };
