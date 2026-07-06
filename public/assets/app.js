@@ -621,7 +621,7 @@ async function loadClientLegacy(id) {
     return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
       <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${item.status === "Pago" ? "Pago" : late ? "Atrasado" : "Pendente"}</span>
-      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Dar baixa</button>` : ""}</div></div>`;
+      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}</div></div>`;
   }).join("") || `<div class="card muted">Nenhum crediário.</div>`;
   const movementHistory = finance.movimentos.map(item => `<div class="financial-movement">
     <div><strong>${escapeHtml(item.tipo)}</strong><span class="muted">OS #${item.id_os} · ${dateBr(item.data_pagamento)}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}</span></div>
@@ -684,7 +684,7 @@ async function loadClient(id) {
     return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
       <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
-      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Dar baixa</button></div></div>`;
+      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
   const appointments = crm.agendamentos.map(item => {
     const past = item.data_hora.slice(0, 10) < todaySp();
@@ -1137,7 +1137,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
     return `<div class="card installment-card">
       <div><strong>Parcela ${item.numero_parcela}/${item.total_parcelas}</strong><div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${status}</span>
-      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${data.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Dar baixa</button>` : ""}</div>
+      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${data.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}</div>
     </div>`;
   }).join("")}</div>` : "";
   const financeEvents = [
