@@ -158,9 +158,11 @@ async function loadFinance() {
 
 async function loadFinancialManagement(
   month = todaySp().slice(0, 7),
-  view = managementData?.visao || "mensal"
+  view = managementData?.visao || "mensal",
+  start = managementData?.data_inicio || `${month}-01`,
+  end = managementData?.data_fim || todaySp()
 ) {
-  managementData = await api(`/api/financeiro/gestao?mes=${month}&visao=${view}`);
+  managementData = await api(`/api/financeiro/gestao?mes=${month}&visao=${view}&inicio=${encodeURIComponent(start)}&fim=${encodeURIComponent(end)}`);
   const summary = managementData.resumo;
   const limitPercent = Math.min(100, (Number(summary.faturamento_anual) / Number(summary.limite_mei)) * 100);
   const pending = managementData.lancamentos.filter(item => item.status === "Pendente").map(item => {
@@ -175,8 +177,9 @@ async function loadFinancialManagement(
     <strong>${item.tipo === "Entrada" ? "+" : "-"} ${money(item.valor)}</strong></div>`).join("") || `<div class="card muted">Nenhuma movimentação neste mês.</div>`;
   const categories = managementData.despesas_categoria.map(item => `<div class="category-row"><span>${escapeHtml(item.categoria)}</span><strong>${money(item.total)}</strong></div>`).join("") || `<p class="muted">Nenhuma despesa paga no período.</p>`;
   $("#fullFinancePanel").innerHTML = `<div class="management-period">
-    <label>Visão<select id="financeView"><option value="mensal" ${managementData.visao === "mensal" ? "selected" : ""}>Mensal</option><option value="geral" ${managementData.visao === "geral" ? "selected" : ""}>Visão geral</option></select></label>
-    <label ${managementData.visao === "geral" ? "hidden" : ""}>Período<input id="financeMonth" type="month" value="${managementData.periodo}"></label>
+    <label>Visão<select id="financeView"><option value="mensal" ${managementData.visao === "mensal" ? "selected" : ""}>Mensal</option><option value="geral" ${managementData.visao === "geral" ? "selected" : ""}>Visão geral</option><option value="periodo" ${managementData.visao === "periodo" ? "selected" : ""}>Por período</option></select></label>
+    <label ${managementData.visao !== "mensal" ? "hidden" : ""}>Mês<input id="financeMonth" type="month" value="${managementData.periodo}"></label>
+    <div class="finance-date-range" ${managementData.visao !== "periodo" ? "hidden" : ""}><label>Data inicial<input id="financeStartDate" type="date" value="${managementData.data_inicio}"></label><label>Data final<input id="financeEndDate" type="date" value="${managementData.data_fim}"></label></div>
   </div>
     <div class="management-stats">
       <button class="card stat income summary-card" data-summary="entradas"><span class="muted">Entradas</span><strong>${money(summary.entradas)}</strong></button>
@@ -191,12 +194,23 @@ async function loadFinancialManagement(
     <div class="management-actions"><button class="primary" data-management-action="Receita">Registrar receita</button><button class="secondary" data-management-action="Despesa">Registrar despesa</button>
       <button class="secondary" data-management-action="Conta">Conta a pagar</button><button class="secondary" data-management-action="DAS">Cadastrar DAS</button></div>
     <div class="management-columns"><section><h2>Contas pendentes</h2>${pending}</section><section><h2>Despesas por categoria</h2><div class="card category-list">${categories}</div></section></div>
-    <h2>Fluxo de caixa do mês</h2><div class="management-history">${cash}</div>
+    <h2>Fluxo de caixa ${managementData.visao === "mensal" ? "do mês" : "do período"}</h2><div class="management-history">${cash}</div>
     <p class="management-note">Controle gerencial. Confira o Relatório Mensal de Receitas Brutas e a DASN-SIMEI nos canais oficiais do MEI.</p>`;
   $("#financeMonth")?.addEventListener("change", event =>
     loadFinancialManagement(event.target.value, managementData.visao));
   $("#financeView").onchange = event =>
-    loadFinancialManagement(managementData.periodo, event.target.value);
+    loadFinancialManagement(managementData.periodo, event.target.value,
+      managementData.data_inicio, managementData.data_fim);
+  const reloadCustomPeriod = () => {
+    const startDate = $("#financeStartDate").value;
+    const endDate = $("#financeEndDate").value;
+    if (startDate && endDate) {
+      loadFinancialManagement(startDate.slice(0, 7), "periodo", startDate, endDate)
+        .catch(error => toast(error.message));
+    }
+  };
+  $("#financeStartDate")?.addEventListener("change", reloadCustomPeriod);
+  $("#financeEndDate")?.addEventListener("change", reloadCustomPeriod);
 }
 
 function openSummaryDetails(kind, source = managementData) {
@@ -225,7 +239,7 @@ function openSummaryDetails(kind, source = managementData) {
       })),
       ...source.lancamentos.filter(item =>
         item.tipo === "Receita" && item.status === "Pendente" &&
-        (source.visao === "geral" || item.competencia === source.periodo)
+        (source.visao !== "mensal" || item.competencia === source.periodo)
       ).map(item => ({
         title: item.descricao, detail: item.data_vencimento
           ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,
@@ -236,7 +250,7 @@ function openSummaryDetails(kind, source = managementData) {
   if (kind === "pagar") {
     items = source.lancamentos.filter(item =>
       ["Despesa", "DAS"].includes(item.tipo) && item.status === "Pendente" &&
-      (source.visao === "geral" || item.competencia === source.periodo)
+      (source.visao !== "mensal" || item.competencia === source.periodo)
     ).map(item => ({
       title: item.descricao, detail: item.data_vencimento
         ? `Vence ${dateBr(item.data_vencimento)}` : item.categoria,

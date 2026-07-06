@@ -1036,7 +1036,19 @@ async function financialManagement(db, request, url, studioId) {
   const today = saoPauloDate();
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("mes") || "")
     ? url.searchParams.get("mes") : today.slice(0, 7);
-  const generalView = url.searchParams.get("visao") === "geral";
+  const requestedView = url.searchParams.get("visao");
+  const view = ["mensal", "geral", "periodo"].includes(requestedView)
+    ? requestedView : "mensal";
+  const generalView = view === "geral";
+  const requestedStart = url.searchParams.get("inicio");
+  const requestedEnd = url.searchParams.get("fim");
+  const periodStart = view === "periodo" && /^\d{4}-\d{2}-\d{2}$/.test(requestedStart || "")
+    ? requestedStart : `${month}-01`;
+  const periodEnd = view === "periodo" && /^\d{4}-\d{2}-\d{2}$/.test(requestedEnd || "")
+    ? requestedEnd : addDays(addMonths(`${month}-01`, 1), -1);
+  if (view === "periodo" && periodStart > periodEnd) {
+    return error("A data inicial não pode ser posterior à data final.");
+  }
   const cashCancellation = url.pathname.match(/^\/api\/financeiro\/caixa\/(\d+)\/cancelar$/);
   if (request.method === "POST" && cashCancellation) {
     const cashId = integer(cashCancellation[1]);
@@ -1101,8 +1113,9 @@ async function financialManagement(db, request, url, studioId) {
         COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
         COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
       FROM caixa
-      WHERE id_estudio=? AND status='Ativo' AND (?=1 OR substr(data_movimento,1,7)=?)
-    `).bind(studioId, generalView ? 1 : 0, month).first();
+      WHERE id_estudio=? AND status='Ativo'
+        AND (?=1 OR substr(data_movimento,1,10) BETWEEN ? AND ?)
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).first();
     const annual = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) faturamento
       FROM caixa WHERE id_estudio=? AND tipo='Entrada' AND substr(data_movimento,1,4)=?
@@ -1111,13 +1124,13 @@ async function financialManagement(db, request, url, studioId) {
     const payable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pendente'
-        AND (?=1 OR competencia=?)
-    `).bind(studioId, generalView ? 1 : 0, month).first();
+        AND (?=1 OR COALESCE(data_vencimento,competencia||'-01') BETWEEN ? AND ?)
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).first();
     const manualReceivable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE id_estudio=? AND tipo='Receita' AND status='Pendente'
-        AND (?=1 OR competencia=?)
-    `).bind(studioId, generalView ? 1 : 0, month).first();
+        AND (?=1 OR COALESCE(data_vencimento,competencia||'-01') BETWEEN ? AND ?)
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).first();
     const { results: clientReceivables } = await db.prepare(`
       SELECT f.id id_financeiro,f.id_os,a.id id_agendamento,c.nome,
         f.valor_final,a.data_hora,
@@ -1128,7 +1141,7 @@ async function financialManagement(db, request, url, studioId) {
           WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado') tem_crediario,
         COALESCE((SELECT SUM(cr.valor_parcela) FROM crediario cr
           WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')
-            AND (?=1 OR substr(cr.data_vencimento,1,7)=?)),0) parcelas_periodo
+            AND (?=1 OR cr.data_vencimento BETWEEN ? AND ?)),0) parcelas_periodo
       FROM financeiro f
       JOIN clientes c ON c.id=f.id_cliente
       LEFT JOIN ordem_servico os ON os.id=f.id_os
@@ -1136,13 +1149,14 @@ async function financialManagement(db, request, url, studioId) {
       WHERE f.id_estudio=? AND f.status<>'Cancelado'
         AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY COALESCE(a.data_hora,f.data_criacao)
-    `).bind(generalView ? 1 : 0, month, studioId).all();
+    `).bind(generalView ? 1 : 0, periodStart, periodEnd, studioId).all();
     const monthlyClientReceivables = clientReceivables
       .map(item => ({
         ...item,
         saldo: item.tem_crediario
           ? Number(item.parcelas_periodo)
-          : generalView || item.data_hora?.slice(0, 7) === month
+          : generalView || (item.data_hora?.slice(0, 10) >= periodStart &&
+              item.data_hora?.slice(0, 10) <= periodEnd)
             ? Math.max(0, item.valor_final - item.pago)
             : 0
       }))
@@ -1174,24 +1188,28 @@ async function financialManagement(db, request, url, studioId) {
     `).bind(studioId, today).all();
     const { results: launches } = await db.prepare(`
       SELECT * FROM gestao_financeira
-      WHERE id_estudio=? AND (status='Pendente' OR competencia=?)
+      WHERE id_estudio=? AND
+        (?=1 OR COALESCE(data_pagamento,data_vencimento,competencia||'-01')
+          BETWEEN ? AND ?)
       ORDER BY CASE WHEN status='Pendente' THEN 0 ELSE 1 END,
         COALESCE(data_vencimento,data_pagamento,data_criacao) DESC,id DESC LIMIT 150
-    `).bind(studioId, month).all();
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).all();
     const { results: cashHistory } = await db.prepare(`
       SELECT cx.id,cx.data_movimento,cx.tipo,cx.categoria,cx.descricao,cx.valor,
         cx.forma_pagamento,c.nome cliente,cx.id_os,os.id_agendamento
       FROM caixa cx LEFT JOIN clientes c ON c.id=cx.id_cliente
       LEFT JOIN ordem_servico os ON os.id=cx.id_os
       WHERE cx.id_estudio=? AND cx.status='Ativo'
-        AND (?=1 OR substr(cx.data_movimento,1,7)=?)
+        AND (?=1 OR substr(cx.data_movimento,1,10) BETWEEN ? AND ?)
       ORDER BY cx.data_movimento DESC,cx.id DESC LIMIT 150
-    `).bind(studioId, generalView ? 1 : 0, month).all();
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).all();
     const { results: expenseCategories } = await db.prepare(`
       SELECT categoria,SUM(valor) total FROM gestao_financeira
-      WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pago' AND competencia=?
+      WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pago'
+        AND (?=1 OR COALESCE(data_pagamento,data_vencimento,competencia||'-01')
+          BETWEEN ? AND ?)
       GROUP BY categoria ORDER BY total DESC
-    `).bind(studioId, month).all();
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).all();
     const { results: monthlyRevenue } = await db.prepare(`
       SELECT substr(data_movimento,1,7) mes,SUM(valor) total FROM caixa
       WHERE id_estudio=? AND tipo='Entrada' AND substr(data_movimento,1,4)=?
@@ -1200,7 +1218,9 @@ async function financialManagement(db, request, url, studioId) {
     `).bind(studioId, month.slice(0, 4)).all();
     return json({
       periodo: month,
-      visao: generalView ? "geral" : "mensal",
+      visao: view,
+      data_inicio: periodStart,
+      data_fim: periodEnd,
       resumo: {
         entradas: cash.entradas, saidas: cash.saidas,
         resultado: cash.entradas - cash.saidas,
