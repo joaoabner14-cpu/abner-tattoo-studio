@@ -679,6 +679,13 @@ async function loadClient(id) {
   const paymentHistory = crm.pagamentos.map(item => `<div class="financial-movement">
     <div><strong>${escapeHtml(item.tipo)}</strong><span class="muted">${dateBr(item.data_evento)} · OS #${item.id_os || "-"}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}</span></div>
     <strong>${item.tipo === "Estorno" ? "- " : ""}${money(item.valor)}</strong></div>`).join("") || `<div class="card muted">Nenhum pagamento registrado.</div>`;
+  const openInstallments = crm.crediarios.map(item => {
+    const late = item.status === "Atrasado" || item.data_vencimento < todaySp();
+    return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
+      <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
+      <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
+      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Dar baixa</button></div></div>`;
+  }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
   const appointments = crm.agendamentos.map(item => {
     const past = item.data_hora.slice(0, 10) < todaySp();
     const status = item.faltou ? "Falta" : item.status;
@@ -707,7 +714,7 @@ async function loadClient(id) {
     </form>
   </div>
   <div class="tab-pane" id="crm-tattoos">${tattooHistory}</div>
-  <div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>
+  <div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>
   <div class="tab-pane" id="crm-appointments">${appointments}</div>
   <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
   <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>`;
@@ -1103,7 +1110,7 @@ function openInstallmentPayment(trigger) {
     else {
       if (selectedClientId) {
         await loadClient(selectedClientId);
-        $("[data-tab=client-finance]", $("#clientDetail"))?.click();
+        $("[data-tab=crm-finance]", $("#clientDetail"))?.click();
       }
       await loadFinance();
     }

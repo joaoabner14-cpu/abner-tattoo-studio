@@ -1186,6 +1186,20 @@ async function clientCrm(db, id) {
     WHERE f.id_cliente=?
     ORDER BY COALESCE(fm.data_pagamento,fm.data_movimento) DESC
   `).bind(id).all();
+  const { results: installments } = await db.prepare(`
+    SELECT cr.id,cr.numero_parcela,cr.data_vencimento,cr.valor_parcela,cr.status,
+      (SELECT COUNT(*) FROM crediario total
+        WHERE total.id_financeiro=cr.id_financeiro
+          AND total.status<>'Cancelado') total_parcelas,
+      f.id_os,a.id id_agendamento
+    FROM crediario cr
+    JOIN financeiro f ON f.id=cr.id_financeiro
+    LEFT JOIN ordem_servico os ON os.id=f.id_os
+    LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+    WHERE f.id_cliente=? AND cr.status IN ('Pendente','Atrasado')
+      AND (a.id IS NULL OR a.status<>'Cancelado')
+    ORDER BY cr.data_vencimento,cr.numero_parcela
+  `).bind(id).all();
   const { results: customEvents } = await db.prepare(`
     SELECT id,tipo,descricao,data_evento,id_os,id_agendamento
     FROM crm_eventos WHERE id_cliente=? ORDER BY data_evento DESC
@@ -1269,6 +1283,7 @@ async function clientCrm(db, id) {
       ultimo_pagamento: payments.find(item => ["Pagamento", "Sinal"].includes(item.tipo))?.data_evento || null
     },
     ordens: orders, agendamentos: appointments, pagamentos: payments,
+    crediarios: installments,
     alertas: alerts, timeline
   });
 }
