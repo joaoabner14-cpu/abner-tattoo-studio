@@ -102,12 +102,13 @@ const whatsappPhone = value => {
   return phone.startsWith("55") ? phone : `55${phone}`;
 };
 
-async function listAppointments(db, url) {
+async function listAppointments(db, url, studioId, studioName) {
   const { results } = await db.prepare(`
     SELECT a.id, a.data_hora, a.status, c.nome, c.telefone
     FROM agendamentos a JOIN clientes c ON c.id = a.id_cliente
+    WHERE a.id_estudio=?
     ORDER BY a.data_hora
-  `).all();
+  `).bind(studioId).all();
   if (url.searchParams.get("tipo") !== "lista") {
     const { results: installments } = await db.prepare(`
       SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.valor_parcela,
@@ -119,16 +120,16 @@ async function listAppointments(db, url) {
       JOIN clientes c ON c.id=f.id_cliente
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE cr.status IN ('Pendente','Atrasado')
+      WHERE f.id_estudio=? AND cr.status IN ('Pendente','Atrasado')
         AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento, cr.numero_parcela
-    `).all();
+    `).bind(studioId).all();
     const { results: marketing } = await db.prepare(`
       SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_evento
       FROM planejamento_marketing
-      WHERE COALESCE(data_postagem,data_inicio) IS NOT NULL
+      WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio) IS NOT NULL
         AND status NOT IN ('Encerrado')
-    `).all();
+    `).bind(studioId).all();
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
       .map(x => ({
         id: `agendamento-${x.id}`,
@@ -180,7 +181,7 @@ async function listAppointments(db, url) {
     const message = encodeURIComponent(
       `Olá, ${row.nome}, tudo bem?
 
-Você possui uma sessão de tatuagem agendada no Abner Tattoo Studio dia *${brDateTime(row.data_hora)}*.
+Você possui uma sessão de tatuagem agendada no ${studioName} dia *${brDateTime(row.data_hora)}*.
 
 Vou te passar um pequeno preparo para esse dia.
 
@@ -205,16 +206,16 @@ Responda NÃO para cancelar ou solicite um REAGENDAMENTO.
   return json(grouped);
 }
 
-async function clients(db, request, url) {
+async function clients(db, request, url, studioId) {
   if (request.method === "POST" && url.pathname === "/api/clientes") {
     const data = await body(request);
     const nome = required(data.nome, "nome");
     const telefone = required(data.telefone, "telefone");
     const cpf = String(data.cpf || "").replace(/\D/g, "") || null;
     const created = await db.prepare(`
-      INSERT INTO clientes(nome,telefone,cidade,data_nascimento,instagram,cpf,rg,observacoes,status)
-      VALUES(?,?,?,?,?,?,?,?,'Ativo')
-    `).bind(nome, telefone, data.cidade || "", data.data_nascimento || null,
+      INSERT INTO clientes(id_estudio,nome,telefone,cidade,data_nascimento,instagram,cpf,rg,observacoes,status)
+      VALUES(?,?,?,?,?,?,?,?,?,'Ativo')
+    `).bind(studioId, nome, telefone, data.cidade || "", data.data_nascimento || null,
       data.instagram || "", cpf, data.rg || "", data.observacoes || "").run();
     return json({ ok: true, id: created.meta.last_row_id, nome }, 201);
   }
@@ -222,31 +223,37 @@ async function clients(db, request, url) {
     const search = `%${url.searchParams.get("busca") || ""}%`;
     const { results } = await db.prepare(`
       SELECT id,nome,telefone,instagram,cpf FROM clientes
-      WHERE nome LIKE ? COLLATE NOCASE OR telefone LIKE ?
-        OR instagram LIKE ? COLLATE NOCASE OR cpf LIKE ?
+      WHERE id_estudio=? AND (nome LIKE ? COLLATE NOCASE OR telefone LIKE ?
+        OR instagram LIKE ? COLLATE NOCASE OR cpf LIKE ?)
       ORDER BY nome LIMIT 100
-    `).bind(search, search, search, search).all();
+    `).bind(studioId, search, search, search, search).all();
     return json(results);
   }
   if (request.method === "GET" && /^\/api\/clientes\/\d+$/.test(url.pathname)) {
     const id = integer(url.pathname.split("/").pop());
-    const client = await db.prepare("SELECT * FROM clientes WHERE id = ?").bind(id).first();
+    const client = await db.prepare("SELECT * FROM clientes WHERE id=? AND id_estudio=?")
+      .bind(id, studioId).first();
     return client ? json(client) : error("Cliente não encontrado.", 404);
   }
   if (request.method === "PUT" && /^\/api\/clientes\/\d+$/.test(url.pathname)) {
     const id = integer(url.pathname.split("/").pop());
     const data = await body(request);
-    const existing = await db.prepare("SELECT observacoes FROM clientes WHERE id=?").bind(id).first();
+    const existing = await db.prepare(
+      "SELECT observacoes FROM clientes WHERE id=? AND id_estudio=?"
+    ).bind(id, studioId).first();
+    if (!existing) return error("Cliente não encontrado.", 404);
     const statements = [db.prepare(`
       UPDATE clientes SET nome=?, telefone=?, cidade=?, instagram=?, cpf=?, rg=?,
-        data_nascimento=?, observacoes=?,status=?,data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
+        data_nascimento=?, observacoes=?,status=?,data_atualizacao=CURRENT_TIMESTAMP
+        WHERE id=? AND id_estudio=?
     `).bind(required(data.nome, "nome"), data.telefone || "", data.cidade || "",
       data.instagram || "", String(data.cpf || "").replace(/\D/g, "") || null, data.rg || "", data.data_nascimento || null,
-      data.observacoes || "", data.status || "Ativo", id)];
+      data.observacoes || "", data.status || "Ativo", id, studioId)];
     if ((existing?.observacoes || "") !== (data.observacoes || "")) {
       statements.push(db.prepare(`
-        INSERT INTO crm_eventos(id_cliente,tipo,descricao) VALUES(?,'Observação',?)
-      `).bind(id, data.observacoes || "Observações removidas."));
+        INSERT INTO crm_eventos(id_estudio,id_cliente,tipo,descricao)
+        VALUES(?,?,'Observação',?)
+      `).bind(studioId, id, data.observacoes || "Observações removidas."));
     }
     await db.batch(statements);
     return json({ ok: true });
@@ -254,40 +261,48 @@ async function clients(db, request, url) {
   return null;
 }
 
-async function createAppointment(db, request) {
+async function createAppointment(db, request, studioId) {
   const data = await body(request);
   const nome = required(data.nome, "nome");
   const telefone = required(data.telefone, "telefone");
   const date = required(data.data, "data");
   const time = required(data.hora, "hora");
   let clientId = integer(data.id_cliente);
+  if (clientId) {
+    const selected = await db.prepare(
+      "SELECT id FROM clientes WHERE id=? AND id_estudio=?"
+    ).bind(clientId, studioId).first();
+    if (!selected) return error("Cliente não encontrado.", 404);
+  }
   if (!clientId) {
-    const existing = await db.prepare("SELECT id FROM clientes WHERE telefone=? LIMIT 1").bind(telefone).first();
+    const existing = await db.prepare(
+      "SELECT id FROM clientes WHERE telefone=? AND id_estudio=? LIMIT 1"
+    ).bind(telefone, studioId).first();
     if (existing) clientId = existing.id;
     else {
       const created = await db.prepare(
-        "INSERT INTO clientes(nome, telefone, status) VALUES(?, ?, 'Ativo')"
-      ).bind(nome, telefone).run();
+        "INSERT INTO clientes(id_estudio,nome,telefone,status) VALUES(?,?,?,'Ativo')"
+      ).bind(studioId, nome, telefone).run();
       clientId = created.meta.last_row_id;
     }
   }
   const value = number(data.valor);
   const appointment = await db.prepare(`
-    INSERT INTO agendamentos(id_cliente, data_hora, valor_orcado) VALUES(?, ?, ?)
-  `).bind(clientId, `${date} ${time}:00`, value).run();
+    INSERT INTO agendamentos(id_estudio,id_cliente,data_hora,valor_orcado) VALUES(?,?,?,?)
+  `).bind(studioId, clientId, `${date} ${time}:00`, value).run();
   const appointmentId = appointment.meta.last_row_id;
   const order = await db.prepare(`
-    INSERT INTO ordem_servico(id_cliente, id_agendamento, status, valor_tatuagem)
-    VALUES(?, ?, 'Agendada', ?)
-  `).bind(clientId, appointmentId, value).run();
+    INSERT INTO ordem_servico(id_estudio,id_cliente,id_agendamento,status,valor_tatuagem)
+    VALUES(?,?,?,'Agendada',?)
+  `).bind(studioId, clientId, appointmentId, value).run();
   await db.prepare(`
-    INSERT INTO financeiro(id_cliente, id_os, valor_orcado, valor_sinal, valor_final, status)
-    VALUES(?, ?, ?, ?, ?, 'Pendente')
-  `).bind(clientId, order.meta.last_row_id, value, number(data.sinal), value).run();
+    INSERT INTO financeiro(id_estudio,id_cliente,id_os,valor_orcado,valor_sinal,valor_final,status)
+    VALUES(?,?,?,?,?,?,'Pendente')
+  `).bind(studioId, clientId, order.meta.last_row_id, value, number(data.sinal), value).run();
   return json({ ok: true, id: appointmentId }, 201);
 }
 
-async function openOrder(db, url) {
+async function openOrder(db, url, studioId) {
   const id = integer(url.searchParams.get("id"));
   const row = await db.prepare(`
     SELECT a.id id_agendamento, a.data_hora, a.status status_agendamento,a.faltou,
@@ -301,8 +316,9 @@ async function openOrder(db, url) {
       f.data_pagamento_sinal
     FROM agendamentos a JOIN clientes c ON c.id=a.id_cliente
     LEFT JOIN ordem_servico os ON os.id_agendamento=a.id
-    LEFT JOIN financeiro f ON f.id_os=os.id WHERE a.id=? LIMIT 1
-  `).bind(id).first();
+    LEFT JOIN financeiro f ON f.id_os=os.id
+    WHERE a.id=? AND a.id_estudio=? LIMIT 1
+  `).bind(id, studioId).first();
   if (!row) return error("Agendamento não encontrado.", 404);
   const { results: installments } = await db.prepare(`
     SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.data_pagamento,
@@ -351,10 +367,12 @@ async function openOrder(db, url) {
     saldo_aberto: Math.max(0, row.valor_final - paid.total) });
 }
 
-async function orderService(db, request, url) {
+async function orderService(db, request, url, studioId) {
   const parts = url.pathname.split("/");
   const osId = integer(parts[3]);
-  const order = await db.prepare("SELECT id FROM ordem_servico WHERE id=?").bind(osId).first();
+  const order = await db.prepare(
+    "SELECT id FROM ordem_servico WHERE id=? AND id_estudio=?"
+  ).bind(osId, studioId).first();
   if (!order) return error("Ordem de serviço não encontrada.", 404);
   if (request.method === "PUT" && parts.length === 4) {
     const data = await body(request);
@@ -368,13 +386,14 @@ async function orderService(db, request, url) {
     const quantity = number(data.quantidade);
     if (quantity <= 0) return error("Informe uma quantidade válida.");
     let stock = await db.prepare(
-      "SELECT id,quantidade_atual FROM estoque WHERE nome=? COLLATE NOCASE LIMIT 1"
-    ).bind(material).first();
+      `SELECT id,quantidade_atual FROM estoque
+       WHERE nome=? COLLATE NOCASE AND id_estudio=? LIMIT 1`
+    ).bind(material, studioId).first();
     if (!stock) {
       const created = await db.prepare(`
-        INSERT INTO estoque(nome,categoria,unidade,quantidade_atual,ativo)
-        VALUES(?,'Material de tatuagem',?,0,1)
-      `).bind(material, data.unidade || "un.").run();
+        INSERT INTO estoque(id_estudio,nome,categoria,unidade,quantidade_atual,ativo)
+        VALUES(?,?,'Material de tatuagem',?,0,1)
+      `).bind(studioId, material, data.unidade || "un.").run();
       stock = { id: created.meta.last_row_id, quantidade_atual: 0 };
     }
     const previous = number(stock.quantidade_atual);
@@ -438,8 +457,8 @@ async function orderService(db, request, url) {
           SELECT id,nome,cor,quantidade_atual,lote,data_validade,
             validade_apos_aberto_dias,data_abertura,
             COALESCE(NULLIF(ml_por_gota,0),0.05) ml_por_gota
-          FROM estoque WHERE id=? AND ativo=1 AND tipo_item='Tinta'
-        `).bind(integer(entry.id_estoque)).first();
+          FROM estoque WHERE id=? AND id_estudio=? AND ativo=1 AND tipo_item='Tinta'
+        `).bind(integer(entry.id_estoque), studioId).first();
         if (!ink) throw new Error("Uma das tintas selecionadas não foi encontrada no estoque.");
         const expiry = effectiveInkExpiry(ink);
         if (expiry && expiry < saoPauloDate()) {
@@ -512,7 +531,7 @@ async function orderService(db, request, url) {
   return null;
 }
 
-async function stock(db, request, url) {
+async function stock(db, request, url, studioId) {
   const match = url.pathname.match(/^\/api\/estoque(?:\/(\d+))?(?:\/movimentos)?$/);
   if (!match) return null;
   const itemId = integer(match[1]);
@@ -522,17 +541,17 @@ async function stock(db, request, url) {
       SELECT COUNT(*) itens,
         COALESCE(SUM(CASE WHEN quantidade_atual<=quantidade_minima THEN 1 ELSE 0 END),0) baixos,
         COALESCE(SUM(quantidade_atual*valor_unitario),0) valor_total
-      FROM estoque WHERE ativo=1
-    `).first();
+      FROM estoque WHERE ativo=1 AND id_estudio=?
+    `).bind(studioId).first();
     const { results: items } = await db.prepare(`
       SELECT id,nome,categoria,marca,unidade,quantidade_atual,quantidade_minima,
         valor_unitario,observacoes,tipo_item,cor,volume_embalagem_ml,ml_por_gota,
         lote,data_validade,validade_apos_aberto_dias,data_abertura,alerta_validade_dias
-      FROM estoque WHERE ativo=1 AND (nome LIKE ? COLLATE NOCASE
+      FROM estoque WHERE ativo=1 AND id_estudio=? AND (nome LIKE ? COLLATE NOCASE
         OR categoria LIKE ? COLLATE NOCASE OR marca LIKE ? COLLATE NOCASE
         OR cor LIKE ? COLLATE NOCASE OR lote LIKE ? COLLATE NOCASE)
       ORDER BY nome LIMIT 100
-    `).bind(search, search, search, search, search).all();
+    `).bind(studioId, search, search, search, search, search).all();
     const today = saoPauloDate();
     const inventory = items.map(item => {
       const expiry = item.tipo_item === "Tinta" ? effectiveInkExpiry(item) : null;
@@ -553,8 +572,9 @@ async function stock(db, request, url) {
       SELECT em.id,em.tipo,em.quantidade,em.saldo_anterior,em.saldo_atual,
         em.valor_unitario,em.observacao,em.id_os,em.data_movimento,e.nome,e.unidade
       FROM estoque_movimentos em JOIN estoque e ON e.id=em.id_estoque
+      WHERE e.id_estudio=?
       ORDER BY em.data_movimento DESC,em.id DESC LIMIT 100
-    `).all();
+    `).bind(studioId).all();
     return json({ resumo: summary, itens: inventory, alertas: alerts, historico: history });
   }
   if (request.method === "POST" && url.pathname === "/api/estoque") {
@@ -563,20 +583,21 @@ async function stock(db, request, url) {
     const isInk = data.tipo_item === "Tinta";
     const existing = await db.prepare(
       `SELECT id FROM estoque WHERE nome=? COLLATE NOCASE AND ativo=1
+       AND id_estudio=?
        AND (?='Material' OR COALESCE(lote,'')=COALESCE(?,'')) LIMIT 1`
-    ).bind(name, isInk ? "Tinta" : "Material", data.lote || "").first();
+    ).bind(name, studioId, isInk ? "Tinta" : "Material", data.lote || "").first();
     if (existing) return error(isInk
       ? "Já existe esta tinta com o mesmo número de lote."
       : "Já existe um material com este nome.");
     const quantity = number(data.quantidade_atual);
     const value = number(data.valor_unitario);
     const created = await db.prepare(`
-      INSERT INTO estoque(nome,categoria,marca,unidade,quantidade_atual,
+      INSERT INTO estoque(id_estudio,nome,categoria,marca,unidade,quantidade_atual,
         quantidade_minima,valor_unitario,observacoes,ativo,tipo_item,cor,
         volume_embalagem_ml,ml_por_gota,lote,data_validade,
         validade_apos_aberto_dias,data_abertura,alerta_validade_dias)
-      VALUES(?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)
-    `).bind(name, data.categoria || "", data.marca || "", data.unidade || "un.",
+      VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)
+    `).bind(studioId, name, data.categoria || "", data.marca || "", data.unidade || "un.",
       quantity, number(data.quantidade_minima), value, data.observacoes || "",
       isInk ? "Tinta" : "Material", isInk ? data.cor || "" : "",
       isInk ? number(data.volume_embalagem_ml) || null : null,
@@ -594,8 +615,9 @@ async function stock(db, request, url) {
     }
     return json({ ok: true, id: created.meta.last_row_id }, 201);
   }
-  const item = await db.prepare("SELECT * FROM estoque WHERE id=? AND ativo=1")
-    .bind(itemId).first();
+  const item = await db.prepare(
+    "SELECT * FROM estoque WHERE id=? AND ativo=1 AND id_estudio=?"
+  ).bind(itemId, studioId).first();
   if (!item) return error("Material não encontrado.", 404);
   if (request.method === "PUT" && url.pathname === `/api/estoque/${itemId}`) {
     const data = await body(request);
@@ -642,16 +664,16 @@ async function stock(db, request, url) {
   return null;
 }
 
-async function dashboard(db) {
+async function dashboard(db, studioId) {
   const today = saoPauloDate();
   const month = today.slice(0, 7);
   const { results: signals } = await db.prepare(`
     SELECT c.nome, f.valor_sinal valor, os.id id_os, a.id id_agendamento, a.data_hora
     FROM financeiro f JOIN clientes c ON c.id=f.id_cliente
     JOIN ordem_servico os ON os.id=f.id_os JOIN agendamentos a ON a.id=os.id_agendamento
-    WHERE f.sinal_pago=0 AND f.valor_sinal>0 AND a.status<>'Cancelado'
+    WHERE f.id_estudio=? AND f.sinal_pago=0 AND f.valor_sinal>0 AND a.status<>'Cancelado'
     ORDER BY a.data_hora
-  `).all();
+  `).bind(studioId).all();
   const { results: installments } = await db.prepare(`
     SELECT cr.id, cr.numero_parcela parcela, cr.valor_parcela valor,
       cr.data_vencimento vencimento,
@@ -662,17 +684,17 @@ async function dashboard(db) {
     JOIN clientes c ON c.id=f.id_cliente
     LEFT JOIN ordem_servico os ON os.id=f.id_os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-    WHERE cr.status IN ('Pendente','Atrasado')
+    WHERE f.id_estudio=? AND cr.status IN ('Pendente','Atrasado')
       AND (a.id IS NULL OR a.status<>'Cancelado')
     ORDER BY cr.data_vencimento
-  `).all();
+  `).bind(studioId).all();
   const late = installments.filter(x => x.vencimento < today);
     const cash = await db.prepare(`
       SELECT
         COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,10)=? THEN valor ELSE 0 END),0) hoje,
         COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,7)=? THEN valor ELSE 0 END),0) mes
-      FROM caixa WHERE status='Ativo'
-  `).bind(today, month).first();
+      FROM caixa WHERE status='Ativo' AND id_estudio=?
+  `).bind(today, month, studioId).first();
   return json({
     resumo: {
       receber_hoje: cash.hoje,
@@ -689,7 +711,7 @@ async function dashboard(db) {
   });
 }
 
-async function createInstallments(db, request) {
+async function createInstallments(db, request, studioId) {
   const data = await body(request);
   const idOs = integer(data.id_os);
   const quantity = integer(data.quantidade);
@@ -701,8 +723,8 @@ async function createInstallments(db, request) {
       COALESCE(SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
         WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END),0) pago
     FROM financeiro f LEFT JOIN financeiro_movimentos fm ON fm.id_financeiro=f.id
-    WHERE f.id_os=? GROUP BY f.id
-  `).bind(idOs).first();
+    WHERE f.id_os=? AND f.id_estudio=? GROUP BY f.id
+  `).bind(idOs, studioId).first();
   if (!financial) return error("Financeiro não encontrado.", 404);
   const existing = await db.prepare(`
     SELECT COUNT(*) total FROM crediario WHERE id_financeiro=? AND status<>'Cancelado'
@@ -728,15 +750,16 @@ async function createInstallments(db, request) {
   return json({ ok: true }, 201);
 }
 
-async function payInstallment(db, request, url) {
+async function payInstallment(db, request, url, studioId) {
   const installmentId = integer(url.pathname.split("/")[3]);
   const installment = await db.prepare(`
     SELECT cr.id, cr.id_financeiro, cr.numero_parcela, cr.valor_parcela, cr.status,
       (SELECT COUNT(*) FROM crediario total
         WHERE total.id_financeiro=cr.id_financeiro AND total.status<>'Cancelado') total_parcelas,
       f.id_cliente, f.id_os
-    FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro WHERE cr.id=?
-  `).bind(installmentId).first();
+    FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
+    WHERE cr.id=? AND f.id_estudio=?
+  `).bind(installmentId, studioId).first();
   if (!installment) return error("Parcela não encontrada.", 404);
   if (installment.status === "Pago") return error("Esta parcela já foi paga.");
   if (installment.status === "Cancelado") return error("Esta parcela está cancelada.");
@@ -752,9 +775,9 @@ async function payInstallment(db, request, url) {
     `).bind(installment.id_financeiro, installment.id, installment.valor_parcela,
       observation, paymentDate),
     db.prepare(`
-      INSERT INTO caixa(data_movimento,tipo,categoria,descricao,valor,id_cliente,id_financeiro,id_os,forma_pagamento)
-      VALUES(?,'Entrada','Crediário',?,?,?,?,?,'Pix')
-    `).bind(paymentDate, observation,
+      INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,id_cliente,id_financeiro,id_os,forma_pagamento)
+      VALUES(?,?,'Entrada','Crediário',?,?,?,?,?,'Pix')
+    `).bind(studioId, paymentDate, observation,
       installment.valor_parcela, installment.id_cliente, installment.id_financeiro, installment.id_os),
     db.prepare("UPDATE crediario SET status='Pago',data_pagamento=? WHERE id=?")
       .bind(paymentDate, installment.id)
@@ -768,25 +791,27 @@ async function payInstallment(db, request, url) {
   return json({ ok: true }, 201);
 }
 
-async function finance(db, request, url) {
+async function finance(db, request, url, studioId) {
   const osId = integer(url.searchParams.get("id_os"));
   if (request.method === "GET" && url.pathname === "/api/movimentos") {
     const { results } = await db.prepare(`
       SELECT fm.* FROM financeiro_movimentos fm JOIN financeiro f ON f.id=fm.id_financeiro
-      WHERE f.id_os=? ORDER BY fm.data_movimento DESC
-    `).bind(osId).all();
+      WHERE f.id_os=? AND f.id_estudio=? ORDER BY fm.data_movimento DESC
+    `).bind(osId, studioId).all();
     return json(results);
   }
   if (request.method === "GET" && url.pathname === "/api/ajustes") {
     const { results } = await db.prepare(`
       SELECT fa.* FROM financeiro_ajustes fa JOIN financeiro f ON f.id=fa.id_financeiro
-      WHERE f.id_os=? ORDER BY fa.data_registro DESC
-    `).bind(osId).all();
+      WHERE f.id_os=? AND f.id_estudio=? ORDER BY fa.data_registro DESC
+    `).bind(osId, studioId).all();
     return json(results);
   }
   const data = await body(request);
   const idOs = integer(data.id_os);
-  const f = await db.prepare("SELECT id, id_cliente, valor_sinal FROM financeiro WHERE id_os=?").bind(idOs).first();
+  const f = await db.prepare(
+    "SELECT id,id_cliente,valor_sinal FROM financeiro WHERE id_os=? AND id_estudio=?"
+  ).bind(idOs, studioId).first();
   if (!f) return error("Financeiro não encontrado.", 404);
   if (url.pathname === "/api/movimentos" && request.method === "POST") {
     const value = number(data.valor);
@@ -799,9 +824,9 @@ async function finance(db, request, url) {
     if (["Pagamento", "Sinal"].includes(data.tipo)) {
       const availableDate = data.forma_pagamento === "Credito" ? nextBusinessDay(paymentDate) : paymentDate;
       await db.prepare(`
-        INSERT INTO caixa(data_movimento,tipo,categoria,descricao,valor,id_cliente,id_financeiro,id_os,forma_pagamento)
-        VALUES(?,'Entrada',?,?,?,?,?,?,?)
-      `).bind(availableDate, data.tipo, data.observacao || `${data.tipo} recebido`, value,
+        INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,id_cliente,id_financeiro,id_os,forma_pagamento)
+        VALUES(?,?,'Entrada',?,?,?,?,?,?,?)
+      `).bind(studioId, availableDate, data.tipo, data.observacao || `${data.tipo} recebido`, value,
         f.id_cliente, f.id, idOs, data.forma_pagamento).run();
       const paid = await db.prepare(`
         SELECT COALESCE(SUM(CASE WHEN tipo IN ('Pagamento','Sinal') THEN valor
@@ -833,7 +858,7 @@ async function finance(db, request, url) {
   return null;
 }
 
-async function financialManagement(db, request, url) {
+async function financialManagement(db, request, url, studioId) {
   const today = saoPauloDate();
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("mes") || "")
     ? url.searchParams.get("mes") : today.slice(0, 7);
@@ -841,7 +866,8 @@ async function financialManagement(db, request, url) {
   const cashCancellation = url.pathname.match(/^\/api\/financeiro\/caixa\/(\d+)\/cancelar$/);
   if (request.method === "POST" && cashCancellation) {
     const cashId = integer(cashCancellation[1]);
-    const entry = await db.prepare("SELECT * FROM caixa WHERE id=?").bind(cashId).first();
+    const entry = await db.prepare("SELECT * FROM caixa WHERE id=? AND id_estudio=?")
+      .bind(cashId, studioId).first();
     if (!entry) return error("Lançamento não encontrado.", 404);
     if (entry.status === "Cancelado") return error("Este lançamento já foi cancelado.");
     const statements = [
@@ -886,8 +912,9 @@ async function financialManagement(db, request, url) {
   const launchCancellation = url.pathname.match(/^\/api\/financeiro\/gestao\/(\d+)\/cancelar$/);
   if (request.method === "POST" && launchCancellation) {
     const launchId = integer(launchCancellation[1]);
-    const launch = await db.prepare("SELECT status FROM gestao_financeira WHERE id=?")
-      .bind(launchId).first();
+    const launch = await db.prepare(
+      "SELECT status FROM gestao_financeira WHERE id=? AND id_estudio=?"
+    ).bind(launchId, studioId).first();
     if (!launch) return error("Lançamento não encontrado.", 404);
     if (launch.status === "Cancelado") return error("Este lançamento já foi cancelado.");
     await db.prepare("UPDATE gestao_financeira SET status='Cancelado' WHERE id=?")
@@ -900,23 +927,23 @@ async function financialManagement(db, request, url) {
         COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
         COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
       FROM caixa
-      WHERE status='Ativo' AND (?=1 OR substr(data_movimento,1,7)=?)
-    `).bind(generalView ? 1 : 0, month).first();
+      WHERE id_estudio=? AND status='Ativo' AND (?=1 OR substr(data_movimento,1,7)=?)
+    `).bind(studioId, generalView ? 1 : 0, month).first();
     const annual = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) faturamento
-      FROM caixa WHERE tipo='Entrada' AND substr(data_movimento,1,4)=?
+      FROM caixa WHERE id_estudio=? AND tipo='Entrada' AND substr(data_movimento,1,4)=?
         AND status='Ativo'
-    `).bind(month.slice(0, 4)).first();
+    `).bind(studioId, month.slice(0, 4)).first();
     const payable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
-      WHERE tipo IN ('Despesa','DAS') AND status='Pendente'
+      WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pendente'
         AND (?=1 OR competencia=?)
-    `).bind(generalView ? 1 : 0, month).first();
+    `).bind(studioId, generalView ? 1 : 0, month).first();
     const manualReceivable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
-      WHERE tipo='Receita' AND status='Pendente'
+      WHERE id_estudio=? AND tipo='Receita' AND status='Pendente'
         AND (?=1 OR competencia=?)
-    `).bind(generalView ? 1 : 0, month).first();
+    `).bind(studioId, generalView ? 1 : 0, month).first();
     const { results: clientReceivables } = await db.prepare(`
       SELECT f.id id_financeiro,f.id_os,a.id id_agendamento,c.nome,
         f.valor_final,a.data_hora,
@@ -932,9 +959,10 @@ async function financialManagement(db, request, url) {
       JOIN clientes c ON c.id=f.id_cliente
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE f.status<>'Cancelado' AND (a.id IS NULL OR a.status<>'Cancelado')
+      WHERE f.id_estudio=? AND f.status<>'Cancelado'
+        AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY COALESCE(a.data_hora,f.data_criacao)
-    `).bind(generalView ? 1 : 0, month).all();
+    `).bind(generalView ? 1 : 0, month, studioId).all();
     const monthlyClientReceivables = clientReceivables
       .map(item => ({
         ...item,
@@ -947,17 +975,17 @@ async function financialManagement(db, request, url) {
       .filter(item => item.saldo > 0);
     const overdueBills = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
-      WHERE status='Pendente' AND data_vencimento<?
-    `).bind(today).first();
+      WHERE id_estudio=? AND status='Pendente' AND data_vencimento<?
+    `).bind(studioId, today).first();
     const overdueCredit = await db.prepare(`
       SELECT COALESCE(SUM(cr.valor_parcela),0) total
       FROM crediario cr
       JOIN financeiro f ON f.id=cr.id_financeiro
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
+      WHERE f.id_estudio=? AND cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
         AND (a.id IS NULL OR a.status<>'Cancelado')
-    `).bind(today).first();
+    `).bind(studioId, today).first();
     const { results: overdueCredits } = await db.prepare(`
       SELECT cr.id,cr.numero_parcela,cr.valor_parcela valor,cr.data_vencimento,
         c.nome,f.id_os,a.id id_agendamento
@@ -966,34 +994,36 @@ async function financialManagement(db, request, url) {
       JOIN clientes c ON c.id=f.id_cliente
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
+      WHERE f.id_estudio=? AND cr.status IN ('Pendente','Atrasado') AND cr.data_vencimento<?
         AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento
-    `).bind(today).all();
+    `).bind(studioId, today).all();
     const { results: launches } = await db.prepare(`
       SELECT * FROM gestao_financeira
-      WHERE status='Pendente' OR competencia=?
+      WHERE id_estudio=? AND (status='Pendente' OR competencia=?)
       ORDER BY CASE WHEN status='Pendente' THEN 0 ELSE 1 END,
         COALESCE(data_vencimento,data_pagamento,data_criacao) DESC,id DESC LIMIT 150
-    `).bind(month).all();
+    `).bind(studioId, month).all();
     const { results: cashHistory } = await db.prepare(`
       SELECT cx.id,cx.data_movimento,cx.tipo,cx.categoria,cx.descricao,cx.valor,
         cx.forma_pagamento,c.nome cliente,cx.id_os,os.id_agendamento
       FROM caixa cx LEFT JOIN clientes c ON c.id=cx.id_cliente
       LEFT JOIN ordem_servico os ON os.id=cx.id_os
-      WHERE cx.status='Ativo' AND (?=1 OR substr(cx.data_movimento,1,7)=?)
+      WHERE cx.id_estudio=? AND cx.status='Ativo'
+        AND (?=1 OR substr(cx.data_movimento,1,7)=?)
       ORDER BY cx.data_movimento DESC,cx.id DESC LIMIT 150
-    `).bind(generalView ? 1 : 0, month).all();
+    `).bind(studioId, generalView ? 1 : 0, month).all();
     const { results: expenseCategories } = await db.prepare(`
       SELECT categoria,SUM(valor) total FROM gestao_financeira
-      WHERE tipo IN ('Despesa','DAS') AND status='Pago' AND competencia=?
+      WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pago' AND competencia=?
       GROUP BY categoria ORDER BY total DESC
-    `).bind(month).all();
+    `).bind(studioId, month).all();
     const { results: monthlyRevenue } = await db.prepare(`
       SELECT substr(data_movimento,1,7) mes,SUM(valor) total FROM caixa
-      WHERE tipo='Entrada' AND substr(data_movimento,1,4)=? AND status='Ativo'
+      WHERE id_estudio=? AND tipo='Entrada' AND substr(data_movimento,1,4)=?
+        AND status='Ativo'
       GROUP BY mes ORDER BY mes
-    `).bind(month.slice(0, 4)).all();
+    `).bind(studioId, month.slice(0, 4)).all();
     return json({
       periodo: month,
       visao: generalView ? "geral" : "mensal",
@@ -1023,27 +1053,28 @@ async function financialManagement(db, request, url) {
       ? data.competencia : today.slice(0, 7);
     if (type === "DAS") {
       const existing = await db.prepare(
-        "SELECT id FROM gestao_financeira WHERE tipo='DAS' AND competencia=? AND status<>'Cancelado'"
-      ).bind(competence).first();
+        `SELECT id FROM gestao_financeira
+         WHERE id_estudio=? AND tipo='DAS' AND competencia=? AND status<>'Cancelado'`
+      ).bind(studioId, competence).first();
       if (existing) return error("O DAS desta competência já está cadastrado.");
     }
     const paid = data.status === "Pago";
     const paymentDate = paid ? (data.data_pagamento || today) : null;
     const created = await db.prepare(`
-      INSERT INTO gestao_financeira(tipo,categoria,descricao,valor,competencia,
+      INSERT INTO gestao_financeira(id_estudio,tipo,categoria,descricao,valor,competencia,
         data_vencimento,data_pagamento,forma_pagamento,status,nota_fiscal,documento,observacoes)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(type, data.categoria || (type === "DAS" ? "Impostos" : "Outros"),
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(studioId, type, data.categoria || (type === "DAS" ? "Impostos" : "Outros"),
       required(data.descricao, "descrição"), value, competence,
       data.data_vencimento || null, paymentDate, data.forma_pagamento || null,
       paid ? "Pago" : "Pendente", data.nota_fiscal ? 1 : 0,
       data.documento || "", data.observacoes || "").run();
     if (paid) {
       await db.prepare(`
-        INSERT INTO caixa(data_movimento,tipo,categoria,descricao,valor,
+        INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,
           forma_pagamento,id_lancamento)
-        VALUES(?,?,?,?,?,?,?)
-      `).bind(paymentDate, type === "Receita" ? "Entrada" : "Saida",
+        VALUES(?,?,?,?,?,?,?,?)
+      `).bind(studioId, paymentDate, type === "Receita" ? "Entrada" : "Saida",
         data.categoria || (type === "DAS" ? "Impostos" : "Outros"),
         data.descricao, value, data.forma_pagamento || "Pix", created.meta.last_row_id).run();
     }
@@ -1053,8 +1084,8 @@ async function financialManagement(db, request, url) {
   if (request.method === "POST" && match) {
     const data = await body(request);
     const launch = await db.prepare(
-      "SELECT * FROM gestao_financeira WHERE id=?"
-    ).bind(integer(match[1])).first();
+      "SELECT * FROM gestao_financeira WHERE id=? AND id_estudio=?"
+    ).bind(integer(match[1]), studioId).first();
     if (!launch) return error("Lançamento não encontrado.", 404);
     if (launch.status !== "Pendente") return error("Este lançamento não está pendente.");
     const paymentDate = data.data_pagamento || today;
@@ -1064,10 +1095,10 @@ async function financialManagement(db, request, url) {
         UPDATE gestao_financeira SET status='Pago',data_pagamento=?,forma_pagamento=? WHERE id=?
       `).bind(paymentDate, paymentMethod, launch.id),
       db.prepare(`
-        INSERT INTO caixa(data_movimento,tipo,categoria,descricao,valor,
+        INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,
           forma_pagamento,id_lancamento)
-        VALUES(?,?,?,?,?,?,?)
-      `).bind(paymentDate, launch.tipo === "Receita" ? "Entrada" : "Saida",
+        VALUES(?,?,?,?,?,?,?,?)
+      `).bind(studioId, paymentDate, launch.tipo === "Receita" ? "Entrada" : "Saida",
         launch.categoria, launch.descricao, launch.valor, paymentMethod, launch.id)
     ]);
     return json({ ok: true });
@@ -1075,7 +1106,7 @@ async function financialManagement(db, request, url) {
   return null;
 }
 
-async function clientSummary(db, url) {
+async function clientSummary(db, url, studioId) {
   const id = integer(url.pathname.split("/")[3]);
   if (url.pathname.endsWith("/financeiro")) {
     const totals = await db.prepare(`
@@ -1087,8 +1118,9 @@ async function clientSummary(db, url) {
       FROM financeiro f
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE f.id_cliente=? AND (a.id IS NULL OR a.status<>'Cancelado')
-    `).bind(id).first();
+      WHERE f.id_cliente=? AND f.id_estudio=?
+        AND (a.id IS NULL OR a.status<>'Cancelado')
+    `).bind(id, studioId).first();
     const { results: orders } = await db.prepare(`
       SELECT f.id id_financeiro, f.id_os, a.id id_agendamento, a.data_hora,
         f.valor_final, f.status,
@@ -1099,15 +1131,17 @@ async function clientSummary(db, url) {
           WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')),0) parcelado
       FROM financeiro f LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE f.id_cliente=? AND (a.id IS NULL OR a.status<>'Cancelado')
+      WHERE f.id_cliente=? AND f.id_estudio=?
+        AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY COALESCE(a.data_hora,f.data_criacao) DESC
-    `).bind(id).all();
+    `).bind(id, studioId).all();
     const { results: movements } = await db.prepare(`
       SELECT fm.id, fm.tipo, fm.valor, fm.forma_pagamento, fm.data_pagamento,
         fm.observacao, f.id_os
       FROM financeiro_movimentos fm JOIN financeiro f ON f.id=fm.id_financeiro
-      WHERE f.id_cliente=? ORDER BY COALESCE(fm.data_pagamento,fm.data_movimento) DESC
-    `).bind(id).all();
+      WHERE f.id_cliente=? AND f.id_estudio=?
+      ORDER BY COALESCE(fm.data_pagamento,fm.data_movimento) DESC
+    `).bind(id, studioId).all();
     const { results: installments } = await db.prepare(`
       SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.data_pagamento,
         cr.valor_parcela, cr.status,
@@ -1117,15 +1151,15 @@ async function clientSummary(db, url) {
       FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-      WHERE f.id_cliente=? AND cr.status<>'Cancelado'
+      WHERE f.id_cliente=? AND f.id_estudio=? AND cr.status<>'Cancelado'
         AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento DESC
-    `).bind(id).all();
+    `).bind(id, studioId).all();
     const { results: adjustments } = await db.prepare(`
       SELECT fa.id, fa.tipo, fa.valor, fa.descricao, fa.data_registro, f.id_os
       FROM financeiro_ajustes fa JOIN financeiro f ON f.id=fa.id_financeiro
-      WHERE f.id_cliente=? ORDER BY fa.data_registro DESC
-    `).bind(id).all();
+      WHERE f.id_cliente=? AND f.id_estudio=? ORDER BY fa.data_registro DESC
+    `).bind(id, studioId).all();
     return json({ ...totals, ordens: orders, movimentos: movements,
       crediarios: installments, ajustes: adjustments });
   }
@@ -1143,30 +1177,32 @@ async function clientSummary(db, url) {
     FROM ordem_servico os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
     LEFT JOIN financeiro f ON f.id_os=os.id
-    WHERE os.id_cliente=? ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
-  `).bind(id).all();
+    WHERE os.id_cliente=? AND os.id_estudio=?
+    ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
+  `).bind(id, studioId).all();
   const { results: materials } = await db.prepare(`
     SELECT oc.id_os, e.nome material, oc.quantidade, oc.unidade
     FROM os_consumo oc JOIN estoque e ON e.id=oc.id_estoque
-    JOIN ordem_servico os ON os.id=oc.id_os WHERE os.id_cliente=?
+    JOIN ordem_servico os ON os.id=oc.id_os
+    WHERE os.id_cliente=? AND os.id_estudio=?
     ORDER BY oc.id
-  `).bind(id).all();
+  `).bind(id, studioId).all();
   return json(orders.map(order => ({
     ...order, materiais: materials.filter(item => item.id_os === order.id_os)
   })));
 }
 
-async function clientCrm(db, id) {
+async function clientCrm(db, id, studioId) {
   const client = await db.prepare(`
     SELECT c.*,EXISTS(SELECT 1 FROM crm_fotos_clientes fc
       WHERE fc.id_cliente=c.id) tem_foto
-    FROM clientes c WHERE c.id=?
-  `).bind(id).first();
+    FROM clientes c WHERE c.id=? AND c.id_estudio=?
+  `).bind(id, studioId).first();
   if (!client) return error("Cliente não encontrado.", 404);
   const { results: appointments } = await db.prepare(`
     SELECT id,data_hora,valor_orcado,status,faltou,observacoes,data_criacao
-    FROM agendamentos WHERE id_cliente=? ORDER BY data_hora DESC
-  `).bind(id).all();
+    FROM agendamentos WHERE id_cliente=? AND id_estudio=? ORDER BY data_hora DESC
+  `).bind(id, studioId).all();
   const { results: orders } = await db.prepare(`
     SELECT os.id id_os,os.id_agendamento,os.descricao,os.regiao_corpo,
       os.tempo_sessao_minutos,os.status status_os,os.data_execucao,os.data_criacao,
@@ -1179,16 +1215,17 @@ async function clientCrm(db, id) {
     FROM ordem_servico os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
     LEFT JOIN financeiro f ON f.id_os=os.id
-    WHERE os.id_cliente=? ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
-  `).bind(id).all();
+    WHERE os.id_cliente=? AND os.id_estudio=?
+    ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
+  `).bind(id, studioId).all();
   const { results: payments } = await db.prepare(`
     SELECT fm.id,fm.tipo,fm.valor,fm.forma_pagamento,fm.observacao,
       COALESCE(fm.data_pagamento,fm.data_movimento) data_evento,f.id_os
     FROM financeiro_movimentos fm
     JOIN financeiro f ON f.id=fm.id_financeiro
-    WHERE f.id_cliente=?
+    WHERE f.id_cliente=? AND f.id_estudio=?
     ORDER BY COALESCE(fm.data_pagamento,fm.data_movimento) DESC
-  `).bind(id).all();
+  `).bind(id, studioId).all();
   const { results: installments } = await db.prepare(`
     SELECT cr.id,cr.numero_parcela,cr.data_vencimento,cr.valor_parcela,cr.status,
       (SELECT COUNT(*) FROM crediario total
@@ -1199,14 +1236,15 @@ async function clientCrm(db, id) {
     JOIN financeiro f ON f.id=cr.id_financeiro
     LEFT JOIN ordem_servico os ON os.id=f.id_os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
-    WHERE f.id_cliente=? AND cr.status IN ('Pendente','Atrasado')
+    WHERE f.id_cliente=? AND f.id_estudio=?
+      AND cr.status IN ('Pendente','Atrasado')
       AND (a.id IS NULL OR a.status<>'Cancelado')
     ORDER BY cr.data_vencimento,cr.numero_parcela
-  `).bind(id).all();
+  `).bind(id, studioId).all();
   const { results: customEvents } = await db.prepare(`
     SELECT id,tipo,descricao,data_evento,id_os,id_agendamento
-    FROM crm_eventos WHERE id_cliente=? ORDER BY data_evento DESC
-  `).bind(id).all();
+    FROM crm_eventos WHERE id_cliente=? AND id_estudio=? ORDER BY data_evento DESC
+  `).bind(id, studioId).all();
   const spent = payments.reduce((sum, item) =>
     sum + (["Pagamento", "Sinal"].includes(item.tipo) ? Number(item.valor)
       : item.tipo === "Estorno" ? -Number(item.valor) : 0), 0);
@@ -1268,9 +1306,10 @@ async function clientCrm(db, id) {
         SELECT f.id_cliente,SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
           WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END) total
         FROM financeiro_movimentos fm JOIN financeiro f ON f.id=fm.id_financeiro
+        WHERE f.id_estudio=?
         GROUP BY f.id_cliente HAVING total>?
       )
-    `).bind(spent).first();
+    `).bind(studioId, spent).first();
     if (Number(ranking.melhores) < 3) alerts.push("Cliente está entre os melhores clientes do estúdio.");
   }
   return json({
@@ -1335,14 +1374,119 @@ async function derivePassword(password, salt, iterations) {
   }, key, 256));
 }
 
+async function passwordCredentials(password) {
+  if (String(password || "").length < 8)
+    throw new Error("A senha deve ter pelo menos 8 caracteres.");
+  const iterations = 310000;
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const hash = await derivePassword(String(password), salt, iterations);
+  return {
+    salt: bytesToBase64(salt), hash: bytesToBase64(hash), iterations
+  };
+}
+
+async function studioAdministration(db, request, url, user) {
+  if (user.papel !== "SUPERADMIN") return error("Acesso restrito ao administrador geral.", 403);
+  if (request.method === "GET" && url.pathname === "/api/admin/estudios") {
+    const { results } = await db.prepare(`
+      SELECT e.*,u.id id_usuario,u.nome nome_usuario,u.login,u.ativo usuario_ativo,
+        (SELECT COUNT(*) FROM clientes c WHERE c.id_estudio=e.id) total_clientes
+      FROM estudios e
+      LEFT JOIN usuarios u ON u.id=(
+        SELECT ux.id FROM usuarios ux WHERE ux.id_estudio=e.id
+        ORDER BY CASE WHEN ux.papel='SUPERADMIN' THEN 0 ELSE 1 END,ux.id LIMIT 1
+      )
+      ORDER BY e.id
+    `).all();
+    return json(results);
+  }
+  if (request.method === "POST" && url.pathname === "/api/admin/estudios") {
+    const data = await body(request);
+    const login = required(data.login, "usuário").toLowerCase();
+    const duplicate = await db.prepare("SELECT id FROM usuarios WHERE login=? COLLATE NOCASE")
+      .bind(login).first();
+    if (duplicate) return error("Este usuário de acesso já está em uso.");
+    const credentials = await passwordCredentials(data.senha);
+    const studio = await db.prepare(`
+      INSERT INTO estudios(nome_estudio,nome_responsavel,cnpj,endereco,instagram)
+      VALUES(?,?,?,?,?)
+    `).bind(required(data.nome_estudio, "nome do estúdio"),
+      required(data.nome_usuario, "nome do responsável"),
+      String(data.cnpj || "").replace(/\D/g, ""), data.endereco || "",
+      data.instagram || "").run();
+    try {
+      const account = await db.prepare(`
+        INSERT INTO usuarios
+          (id_estudio,login,nome,senha_salt,senha_hash,senha_iteracoes,papel)
+        VALUES(?,?,?,?,?,?,'ADMIN_ESTUDIO')
+      `).bind(studio.meta.last_row_id, login,
+        required(data.nome_usuario, "nome do responsável"),
+        credentials.salt, credentials.hash, credentials.iterations).run();
+      return json({
+        ok: true, id: studio.meta.last_row_id, id_usuario: account.meta.last_row_id
+      }, 201);
+    } catch (cause) {
+      await db.prepare("DELETE FROM estudios WHERE id=?").bind(studio.meta.last_row_id).run();
+      throw cause;
+    }
+  }
+  const match = url.pathname.match(/^\/api\/admin\/estudios\/(\d+)$/);
+  if (match && request.method === "PUT") {
+    const studioId = integer(match[1]);
+    const data = await body(request);
+    const active = data.ativo === true || data.ativo === 1 || data.ativo === "1";
+    const studio = await db.prepare("SELECT id FROM estudios WHERE id=?").bind(studioId).first();
+    if (!studio) return error("Estúdio não encontrado.", 404);
+    if (studioId === Number(user.id_estudio) && !active)
+      return error("O estúdio do administrador geral não pode ser desativado.");
+    const account = await db.prepare(
+      "SELECT id FROM usuarios WHERE id_estudio=? ORDER BY id LIMIT 1"
+    ).bind(studioId).first();
+    if (!account) return error("Usuário do estúdio não encontrado.", 404);
+    const login = required(data.login, "usuário").toLowerCase();
+    const duplicate = await db.prepare(
+      "SELECT id FROM usuarios WHERE login=? COLLATE NOCASE AND id<>?"
+    ).bind(login, account.id).first();
+    if (duplicate) return error("Este usuário de acesso já está em uso.");
+    const statements = [
+      db.prepare(`
+        UPDATE estudios SET nome_estudio=?,nome_responsavel=?,cnpj=?,endereco=?,
+          instagram=?,ativo=?,data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
+      `).bind(required(data.nome_estudio, "nome do estúdio"),
+        required(data.nome_usuario, "nome do responsável"),
+        String(data.cnpj || "").replace(/\D/g, ""), data.endereco || "",
+        data.instagram || "", active ? 1 : 0, studioId),
+      db.prepare("UPDATE usuarios SET login=?,nome=?,ativo=? WHERE id=?")
+        .bind(login, required(data.nome_usuario, "nome do responsável"),
+          active ? 1 : 0, account.id)
+    ];
+    if (data.senha) {
+      const credentials = await passwordCredentials(data.senha);
+      statements.push(db.prepare(`
+        UPDATE usuarios SET senha_salt=?,senha_hash=?,senha_iteracoes=? WHERE id=?
+      `).bind(credentials.salt, credentials.hash, credentials.iterations, account.id));
+    }
+    await db.batch(statements);
+    if (!active) {
+      await db.prepare("UPDATE sessoes SET revogada=1 WHERE id_usuario=?")
+        .bind(account.id).run();
+    }
+    return json({ ok: true });
+  }
+  return null;
+}
+
 async function currentUser(db, request) {
   const token = parseCookies(request).studio_session;
   if (!token) return null;
   const row = await db.prepare(`
-    SELECT u.id,u.login,u.nome,u.foto_perfil,s.id id_sessao
-    FROM sessoes s JOIN usuarios u ON u.id=s.id_usuario
+    SELECT u.id,u.login,u.nome,u.foto_perfil,u.id_estudio,u.papel,
+      e.nome_estudio,e.ativo estudio_ativo,s.id id_sessao
+    FROM sessoes s
+    JOIN usuarios u ON u.id=s.id_usuario
+    JOIN estudios e ON e.id=u.id_estudio
     WHERE s.token_hash=? AND s.revogada=0 AND s.data_expiracao>CURRENT_TIMESTAMP
-      AND u.ativo=1 LIMIT 1
+      AND u.ativo=1 AND e.ativo=1 LIMIT 1
   `).bind(await sha256(token)).first();
   return row || null;
 }
@@ -1370,7 +1514,8 @@ async function authApi(db, request, url) {
   if (path === "/api/auth/me" && request.method === "GET") {
     if (!user) return authResponse({ authenticated: false }, 401);
     return authResponse({ authenticated: true, user: {
-      id: user.id, login: user.login, nome: user.nome
+      id: user.id, login: user.login, nome: user.nome, papel: user.papel,
+      id_estudio: user.id_estudio, nome_estudio: user.nome_estudio
     } });
   }
   if (path === "/api/auth/login" && request.method === "POST") {
@@ -1384,9 +1529,10 @@ async function authApi(db, request, url) {
     if (attempts.total >= 5) return authResponse(
       { error: "Muitas tentativas. Aguarde 15 minutos." }, 429
     );
-    const account = await db.prepare(
-      "SELECT * FROM usuarios WHERE login=? AND ativo=1 LIMIT 1"
-    ).bind(login).first();
+    const account = await db.prepare(`
+      SELECT u.* FROM usuarios u JOIN estudios e ON e.id=u.id_estudio
+      WHERE u.login=? AND u.ativo=1 AND e.ativo=1 LIMIT 1
+    `).bind(login).first();
     const salt = account ? base64ToBytes(account.senha_salt) : new Uint8Array(32);
     const expected = account ? base64ToBytes(account.senha_hash) : new Uint8Array(32);
     const derived = await derivePassword(String(data.senha || ""), salt,
@@ -1504,15 +1650,27 @@ async function authApi(db, request, url) {
   return authResponse({ error: "Rota de autenticação não encontrada." }, 404);
 }
 
-async function api(request, env, url) {
+async function api(request, env, url, user) {
   const db = env.DB;
+  const studioId = Number(user.id_estudio);
+  if (url.pathname.startsWith("/api/admin/")) {
+    const administration = await studioAdministration(db, request, url, user);
+    if (administration) return administration;
+    return error("Rota administrativa não encontrada.", 404);
+  }
   const crmMatch = url.pathname.match(/^\/api\/clientes\/(\d+)\/crm$/);
-  if (crmMatch && request.method === "GET") return clientCrm(db, integer(crmMatch[1]));
+  if (crmMatch && request.method === "GET")
+    return clientCrm(db, integer(crmMatch[1]), studioId);
   const crmPhotoMatch = url.pathname.match(/^\/api\/crm\/(cliente|tatuagem)\/(\d+)\/foto$/);
   if (crmPhotoMatch) {
     const table = crmPhotoMatch[1] === "cliente" ? "crm_fotos_clientes" : "crm_fotos_tatuagens";
     const column = crmPhotoMatch[1] === "cliente" ? "id_cliente" : "id_os";
     const id = integer(crmPhotoMatch[2]);
+    const ownerTable = crmPhotoMatch[1] === "cliente" ? "clientes" : "ordem_servico";
+    const owner = await db.prepare(
+      `SELECT id FROM ${ownerTable} WHERE id=? AND id_estudio=?`
+    ).bind(id, studioId).first();
+    if (!owner) return error("Registro não encontrado.", 404);
     if (request.method === "GET") {
       const photo = await db.prepare(
         `SELECT mime_type,dados_base64 FROM ${table} WHERE ${column}=?`
@@ -1543,9 +1701,10 @@ async function api(request, env, url) {
   if (crmOrderMatch && request.method === "PUT") {
     const data = await body(request);
     await db.prepare(`
-      UPDATE ordem_servico SET regiao_corpo=?,tempo_sessao_minutos=? WHERE id=?
+      UPDATE ordem_servico SET regiao_corpo=?,tempo_sessao_minutos=?
+      WHERE id=? AND id_estudio=?
     `).bind(data.regiao_corpo || "", integer(data.tempo_sessao_minutos),
-      integer(crmOrderMatch[1])).run();
+      integer(crmOrderMatch[1]), studioId).run();
     return json({ ok: true });
   }
   if (url.pathname === "/api/notificacoes" && request.method === "GET") {
@@ -1555,7 +1714,8 @@ async function api(request, env, url) {
       SELECT mop.chave,mop.id_planejamento,pm.status
       FROM marketing_oportunidade_planos mop
       LEFT JOIN planejamento_marketing pm ON pm.id=mop.id_planejamento
-    `).all();
+      WHERE mop.id_estudio=?
+    `).bind(studioId).all();
     const opportunities = marketingOpportunities().map(item => {
       const days = Math.round(
         (Date.parse(`${item.date}T12:00:00Z`) - todayTime) / 86400000);
@@ -1573,9 +1733,9 @@ async function api(request, env, url) {
     const { results: actions } = await db.prepare(`
       SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_acao
       FROM planejamento_marketing
-      WHERE COALESCE(data_postagem,data_inicio) IS NOT NULL
+      WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio) IS NOT NULL
         AND status NOT IN ('Publicado','Encerrado')
-    `).all();
+    `).bind(studioId).all();
     const actionNotifications = actions.map(item => {
       const days = Math.round(
         (Date.parse(`${item.data_acao}T12:00:00Z`) - todayTime) / 86400000);
@@ -1595,8 +1755,9 @@ async function api(request, env, url) {
       SELECT pm.*,EXISTS(SELECT 1 FROM marketing_artes ma
         WHERE ma.id_planejamento=pm.id) tem_arte
       FROM planejamento_marketing pm
+      WHERE pm.id_estudio=?
       ORDER BY COALESCE(data_postagem,data_inicio,data_criacao) DESC,id DESC
-    `).all();
+    `).bind(studioId).all();
     return json(results);
   }
   if (url.pathname === "/api/marketing/oportunidades" && request.method === "GET") {
@@ -1604,7 +1765,8 @@ async function api(request, env, url) {
       SELECT mop.chave,mop.id_planejamento,pm.status
       FROM marketing_oportunidade_planos mop
       LEFT JOIN planejamento_marketing pm ON pm.id=mop.id_planejamento
-    `).all();
+      WHERE mop.id_estudio=?
+    `).bind(studioId).all();
     const today = saoPauloDate();
     const todayTime = Date.parse(`${today}T12:00:00Z`);
     return json(marketingOpportunities().map(item => {
@@ -1622,33 +1784,35 @@ async function api(request, env, url) {
     const opportunity = marketingOpportunities().find(item => item.key === data.key);
     if (!opportunity) return error("Oportunidade inválida.");
     const existing = await db.prepare(
-      "SELECT id_planejamento FROM marketing_oportunidade_planos WHERE chave=?"
-    ).bind(opportunity.key).first();
+      `SELECT id_planejamento FROM marketing_oportunidade_planos
+       WHERE id_estudio=? AND chave=?`
+    ).bind(studioId, opportunity.key).first();
     if (existing) return json({ ok: true, id: existing.id_planejamento });
     const publishDate = new Date(`${opportunity.date}T12:00:00Z`);
     publishDate.setUTCDate(publishDate.getUTCDate() - 7);
     const created = await db.prepare(`
       INSERT INTO planejamento_marketing
-        (titulo,tipo,descricao,status,data_inicio,data_fim,data_postagem)
-      VALUES(?,'Promoção',?,'Ideia',?,?,?)
-    `).bind(`Campanha de ${opportunity.name}`,
+        (id_estudio,titulo,tipo,descricao,status,data_inicio,data_fim,data_postagem)
+      VALUES(?,?,'Promoção',?,'Ideia',?,?,?)
+    `).bind(studioId, `Campanha de ${opportunity.name}`,
       `Planejamento para aproveitar ${opportunity.name}.`,
       publishDate.toISOString().slice(0, 10), opportunity.date,
       publishDate.toISOString().slice(0, 10)).run();
     await db.prepare(`
-      INSERT INTO marketing_oportunidade_planos(chave,id_planejamento) VALUES(?,?)
-    `).bind(opportunity.key, created.meta.last_row_id).run();
+      INSERT INTO marketing_oportunidade_planos(id_estudio,chave,id_planejamento)
+      VALUES(?,?,?)
+    `).bind(studioId, opportunity.key, created.meta.last_row_id).run();
     return json({ ok: true, id: created.meta.last_row_id }, 201);
   }
   if (url.pathname === "/api/marketing" && request.method === "POST") {
     const data = await body(request);
     const created = await db.prepare(`
       INSERT INTO planejamento_marketing
-        (titulo,tipo,descricao,oferta,plataformas,status,data_inicio,data_fim,
+        (id_estudio,titulo,tipo,descricao,oferta,plataformas,status,data_inicio,data_fim,
           data_postagem,hora_postagem,texto_postagem,objetivo,publico,
           impulsionar,impulsionamento_inicio,impulsionamento_fim,orcamento,observacoes)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(required(data.titulo, "título"), data.tipo || "Postagem",
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(studioId, required(data.titulo, "título"), data.tipo || "Postagem",
       data.descricao || "", data.oferta || "", data.plataformas || "",
       data.status || "Ideia", data.data_inicio || null, data.data_fim || null,
       data.data_postagem || null, data.hora_postagem || null,
@@ -1658,6 +1822,12 @@ async function api(request, env, url) {
     return json({ ok: true, id: created.meta.last_row_id }, 201);
   }
   const marketingArtMatch = url.pathname.match(/^\/api\/marketing\/(\d+)\/arte$/);
+  if (marketingArtMatch) {
+    const plan = await db.prepare(
+      "SELECT id FROM planejamento_marketing WHERE id=? AND id_estudio=?"
+    ).bind(integer(marketingArtMatch[1]), studioId).first();
+    if (!plan) return error("Planejamento não encontrado.", 404);
+  }
   if (marketingArtMatch && request.method === "GET") {
     const art = await db.prepare(
       "SELECT mime_type,dados_base64 FROM marketing_artes WHERE id_planejamento=?"
@@ -1689,7 +1859,7 @@ async function api(request, env, url) {
         plataformas=?,status=?,data_inicio=?,data_fim=?,data_postagem=?,
         hora_postagem=?,texto_postagem=?,objetivo=?,publico=?,impulsionar=?,
         impulsionamento_inicio=?,impulsionamento_fim=?,orcamento=?,observacoes=?,
-        data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
+        data_atualizacao=CURRENT_TIMESTAMP WHERE id=? AND id_estudio=?
     `).bind(required(data.titulo, "título"), data.tipo || "Postagem",
       data.descricao || "", data.oferta || "", data.plataformas || "",
       data.status || "Ideia", data.data_inicio || null, data.data_fim || null,
@@ -1697,23 +1867,26 @@ async function api(request, env, url) {
       data.texto_postagem || "", data.objetivo || "", data.publico || "",
       data.impulsionar ? 1 : 0, data.impulsionamento_inicio || null,
       data.impulsionamento_fim || null, number(data.orcamento),
-      data.observacoes || "", integer(marketingMatch[1])).run();
+      data.observacoes || "", integer(marketingMatch[1]), studioId).run();
     return json({ ok: true });
   }
   if (marketingMatch && request.method === "DELETE") {
+    const plan = await db.prepare(
+      "SELECT id FROM planejamento_marketing WHERE id=? AND id_estudio=?"
+    ).bind(integer(marketingMatch[1]), studioId).first();
+    if (!plan) return error("Planejamento não encontrado.", 404);
     await db.prepare("DELETE FROM marketing_oportunidade_planos WHERE id_planejamento=?")
       .bind(integer(marketingMatch[1])).run();
     await db.prepare("DELETE FROM marketing_artes WHERE id_planejamento=?")
       .bind(integer(marketingMatch[1])).run();
-    await db.prepare("DELETE FROM planejamento_marketing WHERE id=?")
-      .bind(integer(marketingMatch[1])).run();
+    await db.prepare("DELETE FROM planejamento_marketing WHERE id=? AND id_estudio=?")
+      .bind(integer(marketingMatch[1]), studioId).run();
     return json({ ok: true });
   }
   if (url.pathname === "/api/perfil") {
-    const user = await currentUser(db, request);
-    if (!user) return error("Não autorizado.", 401);
     if (request.method === "GET") {
-      const studio = await db.prepare("SELECT * FROM perfil_estudio WHERE id=1").first();
+      const studio = await db.prepare("SELECT * FROM estudios WHERE id=?")
+        .bind(studioId).first();
       return json({ nome: user.nome, foto_perfil: user.foto_perfil, ...(studio || {}) });
     }
     if (request.method === "PUT") {
@@ -1727,20 +1900,16 @@ async function api(request, env, url) {
         db.prepare("UPDATE usuarios SET nome=?,foto_perfil=? WHERE id=?")
           .bind(required(data.nome, "nome"), photo || null, user.id),
         db.prepare(`
-          INSERT INTO perfil_estudio(id,nome_estudio,endereco,cnpj,instagram,data_atualizacao)
-          VALUES(1,?,?,?,?,CURRENT_TIMESTAMP)
-          ON CONFLICT(id) DO UPDATE SET nome_estudio=excluded.nome_estudio,
-            endereco=excluded.endereco,cnpj=excluded.cnpj,
-            instagram=excluded.instagram,data_atualizacao=CURRENT_TIMESTAMP
-        `).bind(required(data.nome_estudio, "nome do estúdio"), data.endereco || "",
-          String(data.cnpj || "").replace(/\D/g, ""), data.instagram || "")
+          UPDATE estudios SET nome_estudio=?,nome_responsavel=?,endereco=?,cnpj=?,
+            instagram=?,data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
+        `).bind(required(data.nome_estudio, "nome do estúdio"),
+          required(data.nome, "nome"), data.endereco || "",
+          String(data.cnpj || "").replace(/\D/g, ""), data.instagram || "", studioId)
       ]);
       return json({ ok: true });
     }
   }
   if (url.pathname === "/api/perfil/senha" && request.method === "PUT") {
-    const user = await currentUser(db, request);
-    if (!user) return error("Não autorizado.", 401);
     const data = await body(request);
     const password = String(data.nova_senha || "");
     if (password.length < 8) return error("A nova senha deve ter pelo menos 8 caracteres.");
@@ -1759,16 +1928,18 @@ async function api(request, env, url) {
     ]);
     return json({ ok: true });
   }
-  const clientResponse = await clients(db, request, url);
+  const clientResponse = await clients(db, request, url, studioId);
   if (clientResponse) return clientResponse;
-  const stockResponse = await stock(db, request, url);
+  const stockResponse = await stock(db, request, url, studioId);
   if (stockResponse) return stockResponse;
   if (url.pathname.startsWith("/api/financeiro/")) {
-    const managementResponse = await financialManagement(db, request, url);
+    const managementResponse = await financialManagement(db, request, url, studioId);
     if (managementResponse) return managementResponse;
   }
-  if (request.method === "GET" && url.pathname === "/api/agendamentos") return listAppointments(db, url);
-  if (request.method === "POST" && url.pathname === "/api/agendamentos") return createAppointment(db, request);
+  if (request.method === "GET" && url.pathname === "/api/agendamentos")
+    return listAppointments(db, url, studioId, user.nome_estudio);
+  if (request.method === "POST" && url.pathname === "/api/agendamentos")
+    return createAppointment(db, request, studioId);
   if (request.method === "PUT" && /^\/api\/agendamentos\/\d+$/.test(url.pathname)) {
     const data = await body(request);
     const missed = data.status === "Falta";
@@ -1784,26 +1955,32 @@ async function api(request, env, url) {
     };
     const appointmentId = integer(url.pathname.split("/").pop());
     const previous = await db.prepare(
-      "SELECT id_cliente,data_hora,status,faltou FROM agendamentos WHERE id=?"
-    ).bind(appointmentId).first();
+      `SELECT id_cliente,data_hora,status,faltou FROM agendamentos
+       WHERE id=? AND id_estudio=?`
+    ).bind(appointmentId, studioId).first();
+    if (!previous) return error("Agendamento não encontrado.", 404);
     const statements = [
-      db.prepare("UPDATE agendamentos SET data_hora=?,status=?,faltou=? WHERE id=?")
-        .bind(`${data.data} ${data.hora}:00`, status, missed ? 1 : 0, appointmentId),
-      db.prepare("UPDATE ordem_servico SET status=? WHERE id_agendamento=?")
-        .bind(orderStatuses[status], appointmentId)
+      db.prepare(`UPDATE agendamentos SET data_hora=?,status=?,faltou=?
+        WHERE id=? AND id_estudio=?`)
+        .bind(`${data.data} ${data.hora}:00`, status, missed ? 1 : 0,
+          appointmentId, studioId),
+      db.prepare(`UPDATE ordem_servico SET status=?
+        WHERE id_agendamento=? AND id_estudio=?`)
+        .bind(orderStatuses[status], appointmentId, studioId)
     ];
     if (previous) {
       const nextDate = `${data.data} ${data.hora}:00`;
       if (previous.data_hora !== nextDate) statements.push(db.prepare(`
-        INSERT INTO crm_eventos(id_cliente,id_agendamento,tipo,descricao)
-        VALUES(?,?,'Reagendamento',?)
-      `).bind(previous.id_cliente, appointmentId,
+        INSERT INTO crm_eventos(id_estudio,id_cliente,id_agendamento,tipo,descricao)
+        VALUES(?,?,?,'Reagendamento',?)
+      `).bind(studioId, previous.id_cliente, appointmentId,
         `Horário alterado de ${brDateTime(previous.data_hora)} para ${brDateTime(nextDate)}.`));
       if (previous.status !== status || Boolean(previous.faltou) !== missed) {
         statements.push(db.prepare(`
-          INSERT INTO crm_eventos(id_cliente,id_agendamento,tipo,descricao)
-          VALUES(?,?,?,?)
-        `).bind(previous.id_cliente, appointmentId, missed ? "Falta" : "Status",
+          INSERT INTO crm_eventos(id_estudio,id_cliente,id_agendamento,tipo,descricao)
+          VALUES(?,?,?,?,?)
+        `).bind(studioId, previous.id_cliente, appointmentId,
+          missed ? "Falta" : "Status",
           missed ? "Cliente não compareceu ao agendamento." : `Status alterado para ${status}.`));
       }
     }
@@ -1821,9 +1998,9 @@ async function api(request, env, url) {
         FROM financeiro f
         JOIN ordem_servico os ON os.id=f.id_os
         LEFT JOIN financeiro_movimentos fm ON fm.id_financeiro=f.id
-        WHERE os.id_agendamento=?
+        WHERE os.id_agendamento=? AND f.id_estudio=?
         GROUP BY f.id
-      `).bind(appointmentId).first();
+      `).bind(appointmentId, studioId).first();
       if (financial) {
         signalRefund = Math.max(0, Number(financial.sinal_recebido));
         statements.push(
@@ -1848,10 +2025,10 @@ async function api(request, env, url) {
               description, refundDate),
             db.prepare(`
               INSERT INTO caixa
-                (data_movimento,tipo,categoria,descricao,valor,id_cliente,
+                (id_estudio,data_movimento,tipo,categoria,descricao,valor,id_cliente,
                   id_financeiro,id_os,forma_pagamento)
-              VALUES(?,'Saida','Estorno',?,?,?,?,?,?)
-            `).bind(refundDate, description, signalRefund, financial.id_cliente,
+              VALUES(?,?,'Saida','Estorno',?,?,?,?,?,?)
+            `).bind(studioId, refundDate, description, signalRefund, financial.id_cliente,
               financial.id, financial.id_os, financial.forma_pagamento)
           );
         }
@@ -1860,18 +2037,22 @@ async function api(request, env, url) {
     await db.batch(statements);
     return json({ ok: true, estorno_sinal: signalRefund });
   }
-  if (request.method === "GET" && url.pathname === "/api/os") return openOrder(db, url);
+  if (request.method === "GET" && url.pathname === "/api/os")
+    return openOrder(db, url, studioId);
   if (/^\/api\/os\/\d+(?:\/(?:materiais|tintas)(?:\/\d+)?)?$/.test(url.pathname)) {
-    const response = await orderService(db, request, url);
+    const response = await orderService(db, request, url, studioId);
     if (response) return response;
   }
-  if (request.method === "GET" && url.pathname === "/api/dashboard") return dashboard(db);
-  if (request.method === "POST" && url.pathname === "/api/crediario") return createInstallments(db, request);
+  if (request.method === "GET" && url.pathname === "/api/dashboard")
+    return dashboard(db, studioId);
+  if (request.method === "POST" && url.pathname === "/api/crediario")
+    return createInstallments(db, request, studioId);
   if (request.method === "POST" && /^\/api\/crediario\/\d+\/pagar$/.test(url.pathname))
-    return payInstallment(db, request, url);
-  if (["/api/movimentos", "/api/ajustes"].includes(url.pathname)) return finance(db, request, url);
+    return payInstallment(db, request, url, studioId);
+  if (["/api/movimentos", "/api/ajustes"].includes(url.pathname))
+    return finance(db, request, url, studioId);
   if (request.method === "GET" && /^\/api\/clientes\/\d+\/(historico|financeiro)$/.test(url.pathname))
-    return clientSummary(db, url);
+    return clientSummary(db, url, studioId);
   return error("Rota não encontrada.", 404);
 }
 
@@ -1887,7 +2068,7 @@ export default {
         if (!["GET", "HEAD"].includes(request.method) && origin && origin !== url.origin) {
           return error("Origem da solicitação não permitida.", 403);
         }
-        return await api(request, env, url);
+        return await api(request, env, url, user);
       }
       const response = await env.ASSETS.fetch(request);
       const headers = new Headers(response.headers);

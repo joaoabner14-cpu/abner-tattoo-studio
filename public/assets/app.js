@@ -63,6 +63,8 @@ let marketingData = [];
 let marketingArtData = "";
 let marketingOpportunities = [];
 let notificationsData = [];
+let sessionUser = null;
+let studiosData = [];
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -504,6 +506,56 @@ function openMarketingPlan(itemId = "") {
     await loadMarketing();
     await loadNotifications();
     calendar?.refetchEvents();
+  };
+}
+
+async function loadStudios() {
+  studiosData = await api("/api/admin/estudios");
+  $("#studiosPanel").innerHTML = `<div class="studio-admin-grid">${studiosData.map(item => `
+    <article class="card studio-admin-card">
+      <div class="card-head"><div><strong>${escapeHtml(item.nome_estudio)}</strong>
+        <small>${escapeHtml(item.nome_responsavel || item.nome_usuario || "")}</small></div>
+        <span class="badge ${item.ativo ? "" : "badge-late"}">${item.ativo ? "Ativo" : "Inativo"}</span></div>
+      <div class="studio-admin-details">
+        <span>Usuário<strong>${escapeHtml(item.login || "—")}</strong></span>
+        <span>Clientes<strong>${item.total_clientes || 0}</strong></span>
+        <span>CNPJ<strong>${escapeHtml(item.cnpj || "Não informado")}</strong></span>
+        <span>Instagram<strong>${escapeHtml(item.instagram || "Não informado")}</strong></span>
+      </div>
+      <p class="muted">${escapeHtml(item.endereco || "Endereço não informado")}</p>
+      <button class="secondary" data-studio-action="edit" data-id="${item.id}">Editar estúdio</button>
+    </article>`).join("") || `<div class="panel empty">Nenhum estúdio cadastrado.</div>`}</div>`;
+}
+
+function openStudioEditor(studioId = "") {
+  const item = studiosData.find(entry => String(entry.id) === String(studioId)) || {};
+  $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} estúdio</h2><button class="close" type="button">×</button></header>
+    <form id="studioAdminForm">
+      <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(item.nome_estudio)}" required></label>
+      <label>Nome do responsável<input name="nome_usuario" value="${escapeHtml(item.nome_responsavel || item.nome_usuario)}" required></label>
+      <label>Usuário de acesso<input name="login" value="${escapeHtml(item.login)}" autocomplete="off" autocapitalize="none" required></label>
+      <label>${item.id ? "Nova senha (opcional)" : "Senha inicial"}<input name="senha" type="password" minlength="8" autocomplete="new-password" ${item.id ? "" : "required"}></label>
+      <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(item.cnpj)}"></label>
+      <label>Endereço<textarea name="endereco">${escapeHtml(item.endereco)}</textarea></label>
+      <label>Instagram<input name="instagram" value="${escapeHtml(item.instagram)}"></label>
+      ${item.id ? `<label class="check-label"><input name="ativo" type="checkbox" value="1" ${item.ativo ? "checked" : ""}> Estúdio ativo</label>` : ""}
+      <button class="primary">${item.id ? "Salvar alterações" : "Criar estúdio e usuário"}</button>
+    </form>`;
+  applyInputMasks($("#actionContent"));
+  $("#actionDialog").showModal();
+  $("#studioAdminForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    if (item.id) values.ativo = form.elements.ativo.checked;
+    await api(item.id ? `/api/admin/estudios/${item.id}` : "/api/admin/estudios", {
+      method: item.id ? "PUT" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(values)
+    });
+    $("#actionDialog").close();
+    toast(item.id ? "Estúdio atualizado." : "Estúdio e usuário criados.");
+    await loadStudios();
   };
 }
 
@@ -1230,7 +1282,7 @@ document.addEventListener("input", event => {
 
 document.addEventListener("click", event => {
   const nav = event.target.closest(".nav-link");
-  if (nav) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") { loadFinance(); loadFinancialManagement(); } if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); }
+  if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") { loadFinance(); loadFinancialManagement(); } if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
   if (event.target.closest("[data-open=appointment]")) openAppointment();
   if (event.target.closest("[data-open=client]")) openNewClient();
   if (event.target.closest(".close")) event.target.closest("dialog").close();
@@ -1261,6 +1313,8 @@ document.addEventListener("click", event => {
   if (stockAction) openStockAction(stockAction.dataset.stockAction, stockAction.dataset.id);
   const marketingAction = event.target.closest("[data-marketing-action]");
   if (marketingAction) openMarketingPlan(marketingAction.dataset.id);
+  const studioAction = event.target.closest("[data-studio-action]");
+  if (studioAction) openStudioEditor(studioAction.dataset.id);
   const opportunityPlan = event.target.closest(".plan-opportunity");
   if (opportunityPlan) {
     post("/api/marketing/oportunidades/planejar", { key: opportunityPlan.dataset.key })
@@ -1466,9 +1520,16 @@ function showLogin() {
   document.body.classList.remove("auth-loading");
   document.body.classList.remove("authenticated");
   applicationStarted = false;
+  sessionUser = null;
 }
 
-async function startApplication() {
+async function startApplication(user) {
+  sessionUser = user || sessionUser;
+  if (sessionUser) {
+    $("#studioName").textContent = sessionUser.nome_estudio || "Gestão do estúdio";
+    document.title = sessionUser.nome_estudio || "Gestão do estúdio";
+    $("#adminStudiosNav").hidden = sessionUser.papel !== "SUPERADMIN";
+  }
   try { localStorage.setItem("studio_authenticated", "1"); } catch {}
   document.body.classList.remove("auth-loading");
   document.body.classList.add("authenticated");
@@ -1481,7 +1542,7 @@ async function startApplication() {
   try {
     const savedPage = sessionStorage.getItem("activePage");
     const savedNav = savedPage ? $(`.nav-link[data-page="${savedPage}"]`) : null;
-    if (savedNav && savedPage !== "agenda") savedNav.click();
+    if (savedNav && !savedNav.hidden && savedPage !== "agenda") savedNav.click();
   } catch {}
   if ($("#agenda").classList.contains("active")) {
     showAgenda().catch(error => toast(error.message));
@@ -1491,7 +1552,7 @@ async function startApplication() {
 async function checkAuthentication() {
   try {
     const session = await api("/api/auth/me");
-    if (session.authenticated) await startApplication();
+    if (session.authenticated) await startApplication(session.user);
   } catch {
     showLogin();
   }
@@ -1513,7 +1574,8 @@ $("#loginForm").onsubmit = async event => {
       form.reset();
     }
 
-    await startApplication();
+    const session = await api("/api/auth/me");
+    await startApplication(session.user);
   } catch (error) {
     $("#loginError").textContent = error.message;
   } finally {

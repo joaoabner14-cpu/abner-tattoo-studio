@@ -37,7 +37,7 @@
   <header class="topbar">
     <button class="icon-button" id="menuButton" aria-label="Abrir menu">☰</button>
     <img src="/assets/img/logo.png" alt="" class="logo">
-    <div><strong>Abner Tattoo Studio</strong><small>Gestão do estúdio</small></div>
+    <div class="studio-heading"><strong id="studioName">Abner Tattoo Studio</strong><small>Gestão do estúdio</small></div>
     <button class="notification-button" id="notificationButton" type="button" aria-label="Abrir notificações">🔔<span id="notificationBadge" hidden>0</span></button>
     <button class="account-button" id="accountButton" type="button" aria-label="Abrir perfil">👤</button>
   </header>
@@ -47,6 +47,7 @@
     <button class="nav-link" data-page="financeiro">Financeiro</button>
     <button class="nav-link" data-page="estoque">Estoque</button>
     <button class="nav-link" data-page="marketing">Marketing</button>
+    <button class="nav-link" id="adminStudiosNav" data-page="estudios" hidden>Estúdios</button>
     <div class="sidebar-account">
       <button class="nav-link" id="logoutButton">Sair</button>
     </div>
@@ -78,6 +79,10 @@
     <section id="marketing" class="page">
       <div class="page-title"><div><span class="eyebrow">PLANEJAMENTO</span><h1>Marketing</h1></div><button class="primary" data-marketing-action="new">+ Novo planejamento</button></div>
       <div id="marketingPanel"></div>
+    </section>
+    <section id="estudios" class="page">
+      <div class="page-title"><div><span class="eyebrow">ADMINISTRAÇÃO GERAL</span><h1>Estúdios</h1></div><button class="primary" data-studio-action="new">+ Novo estúdio</button></div>
+      <div id="studiosPanel"></div>
     </section>
   </main>
 
