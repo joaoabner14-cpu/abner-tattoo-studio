@@ -65,72 +65,6 @@ const safeFileName = value => String(value || "cliente").normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-")
   .replace(/^-+|-+$/g, "").toLowerCase();
 
-const bufferToBase64 = buffer => {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 32768) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
-  }
-  return btoa(binary);
-};
-const base64ToBuffer = value => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-};
-async function exportEncryptionKey(password, salt, usage) {
-  const material = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]
-  );
-  return crypto.subtle.deriveKey({
-    name: "PBKDF2", hash: "SHA-256", salt, iterations: 310000
-  }, material, { name: "AES-GCM", length: 256 }, false, usage);
-}
-async function encryptStudioExport(data, password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await exportEncryptionKey(password, salt, ["encrypt"]);
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv }, key,
-    new TextEncoder().encode(JSON.stringify(data))
-  );
-  return {
-    formato: "abner-tattoo-studio-export-criptografado",
-    versao: 1, algoritmo: "AES-256-GCM",
-    derivacao: { algoritmo: "PBKDF2-SHA256", iteracoes: 310000 },
-    salt: bufferToBase64(salt), iv: bufferToBase64(iv),
-    dados_criptografados: bufferToBase64(encrypted)
-  };
-}
-async function decryptStudioExport(envelope, password) {
-  if (envelope.formato !== "abner-tattoo-studio-export-criptografado") {
-    throw new Error("Este não é um arquivo de exportação criptografado válido.");
-  }
-  const salt = base64ToBuffer(envelope.salt);
-  const iv = base64ToBuffer(envelope.iv);
-  const key = await exportEncryptionKey(password, salt, ["decrypt"]);
-  try {
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv }, key,
-      base64ToBuffer(envelope.dados_criptografados)
-    );
-    return JSON.parse(new TextDecoder().decode(decrypted));
-  } catch {
-    throw new Error("Senha incorreta ou arquivo corrompido.");
-  }
-}
-function downloadJson(data, name) {
-  const url = URL.createObjectURL(new Blob(
-    [JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }
-  ));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 async function exportClientData(id, name) {
   const data = await api(`/api/clientes/${id}/lgpd/exportar`);
   const url = URL.createObjectURL(new Blob(
@@ -834,41 +768,34 @@ function openSecureStudioExport() {
     button.textContent = "Preparando exportação...";
     try {
       const data = await api("/api/estudio/exportar");
-      const encrypted = await encryptStudioExport(data, password);
-      downloadJson(encrypted,
-        `exportacao-${safeFileName(data.estudio.nome_estudio)}-${todaySp()}.ats`);
+      if (!globalThis.zip) throw new Error("Não foi possível carregar o gerador de ZIP.");
+      globalThis.zip.configure({ useWebWorkers: false });
+      const writer = new globalThis.zip.ZipWriter(
+        new globalThis.zip.BlobWriter("application/zip"),
+        { password, encryptionStrength: 3 }
+      );
+      await writer.add("backup.json",
+        new globalThis.zip.TextReader(JSON.stringify(data, null, 2)),
+        { password, encryptionStrength: 3 });
+      await writer.add("LEIA-ME.txt", new globalThis.zip.TextReader(
+        "Backup exportado pelo sistema de gestão do estúdio.\n" +
+        "Abra este ZIP com 7-Zip ou WinRAR e informe a senha definida na exportação.\n" +
+        "O arquivo backup.json contém os dados operacionais pertencentes ao estúdio."
+      ), { password, encryptionStrength: 3 });
+      const blob = await writer.close();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `backup-${safeFileName(data.estudio.nome)}-${todaySp()}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
       $("#actionDialog").close();
-      toast("Exportação criptografada concluída.");
+      toast("Backup ZIP protegido concluído.");
     } catch (error) {
       feedback.textContent = error.message;
     } finally {
       button.disabled = false;
       button.textContent = "Criptografar e baixar";
-    }
-  };
-}
-
-function openSecureExportReader() {
-  $("#actionContent").innerHTML = `<header><h2>Abrir exportação protegida</h2><button class="close" type="button">×</button></header>
-    <form id="secureExportReaderForm">
-      <label>Arquivo protegido<input name="arquivo" type="file" accept=".ats,application/json" required></label>
-      <label>Senha do arquivo<input name="senha" type="password" autocomplete="current-password" required></label>
-      <button class="primary">Descriptografar arquivo</button>
-      <p class="form-feedback" role="alert"></p>
-    </form>`;
-  if (!$("#actionDialog").open) $("#actionDialog").showModal();
-  $("#secureExportReaderForm").onsubmit = async event => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const feedback = $(".form-feedback", form);
-    try {
-      const envelope = JSON.parse(await form.elements.arquivo.files[0].text());
-      const data = await decryptStudioExport(envelope, form.elements.senha.value);
-      downloadJson(data,
-        `dados-${safeFileName(data.estudio?.nome_estudio)}-${todaySp()}.json`);
-      toast("Arquivo descriptografado.");
-    } catch (error) {
-      feedback.textContent = error.message;
     }
   };
 }
@@ -1368,8 +1295,7 @@ async function openProfile() {
     </form>
     ${canExportStudio ? `<div class="secure-export-actions">
       <h2>Dados do estúdio</h2>
-      <button class="secondary secure-studio-export" type="button">Exportar arquivo protegido</button>
-      <button class="secondary secure-export-reader" type="button">Abrir exportação protegida</button>
+      <button class="secondary secure-studio-export" type="button">Exportar backup ZIP protegido</button>
     </div>` : ""}
     <div class="profile-password">
       <h2>Atualizar senha</h2>
@@ -1776,7 +1702,6 @@ document.addEventListener("click", event => {
   if (backStudioUsers) openStudioUsers(backStudioUsers.dataset.studio)
     .catch(error => toast(error.message));
   if (event.target.closest(".secure-studio-export")) openSecureStudioExport();
-  if (event.target.closest(".secure-export-reader")) openSecureExportReader();
   const subscriptionPayment = event.target.closest(".pay-subscription-installment");
   if (subscriptionPayment) openSubscriptionPayment(subscriptionPayment);
   const subscriptionCancellation = event.target.closest(".cancel-subscription-installment");

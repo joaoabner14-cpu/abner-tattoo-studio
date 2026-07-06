@@ -1788,13 +1788,6 @@ async function studioDataExport(db, studioId) {
   const studio = await db.prepare("SELECT * FROM estudios WHERE id=?").bind(studioId).first();
   if (!studio) return null;
   const queries = {
-    usuarios: `SELECT id,login,nome,ativo,data_criacao,ultimo_login,foto_perfil,papel,
-        perfil_acesso,cor_agenda
-      FROM usuarios WHERE id_estudio=?`,
-    modulos: "SELECT * FROM estudio_modulos WHERE id_estudio=? ORDER BY modulo",
-    assinatura: "SELECT * FROM assinaturas_estudios WHERE id_estudio=?",
-    parcelas_acesso: `SELECT * FROM assinatura_parcelas
-      WHERE id_estudio=? ORDER BY competencia`,
     clientes: "SELECT * FROM clientes WHERE id_estudio=? ORDER BY id",
     agendamentos: "SELECT * FROM agendamentos WHERE id_estudio=? ORDER BY id",
     ordens_servico: "SELECT * FROM ordem_servico WHERE id_estudio=? ORDER BY id",
@@ -1834,13 +1827,24 @@ async function studioDataExport(db, studioId) {
   const exported = {};
   for (const [key, sql] of Object.entries(queries)) {
     const { results } = await db.prepare(sql).bind(studioId).all();
-    exported[key] = results;
+    exported[key] = results.map(row => Object.fromEntries(
+      Object.entries(row).filter(([field]) =>
+        field !== "id_estudio" && field !== "id_usuario" &&
+        !field.startsWith("id_usuario_"))
+    ));
   }
   return {
     formato: "abner-tattoo-studio-export",
-    versao: 1,
+    versao: 2,
     exportado_em: new Date().toISOString(),
-    estudio: studio,
+    estudio: {
+      nome: studio.nome_estudio,
+      responsavel: studio.nome_responsavel,
+      cnpj: studio.cnpj,
+      endereco: studio.endereco,
+      instagram: studio.instagram,
+      email_privacidade: studio.email_privacidade
+    },
     dados: exported
   };
 }
