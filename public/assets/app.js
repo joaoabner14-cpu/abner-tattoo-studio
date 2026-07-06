@@ -41,6 +41,12 @@ const maskCpf = input => {
     .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
     .replace(/\.(\d{3})(\d)/, ".$1-$2");
 };
+const maskedCpf = value => {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 11);
+  return digits.replace(/^(\d{3})(\d)/, "$1.$2")
+    .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1-$2");
+};
 const maskCnpj = input => {
   const digits = input.value.replace(/\D/g, "").slice(0, 14);
   input.value = digits.replace(/^(\d{2})(\d)/, "$1.$2")
@@ -776,13 +782,14 @@ function openAppointment(date = "") {
 async function loadClients(search = "") {
   const requestId = ++clientSearchRequest;
   const term = search.trim();
-  if (term.length < 1) {
+  const desktopList = window.matchMedia("(min-width: 801px)").matches;
+  if (term.length < 1 && !desktopList) {
     $("#clientList").innerHTML = `<p class="muted client-search-hint">Digite para localizar um cliente.</p>`;
     return;
   }
-  const clients = await api(`/api/clientes?busca=${encodeURIComponent(term)}`);
+  const clients = await api(`/api/clientes?busca=${encodeURIComponent(term)}${!term && desktopList ? "&todos=1" : ""}`);
   if (requestId !== clientSearchRequest) return;
-  $("#clientList").innerHTML = clients.map(c => `<button class="client-item select-client" data-id="${c.id}" data-name="${escapeHtml(c.nome)}"><strong>${escapeHtml(c.nome)}</strong><br><span class="muted">${escapeHtml(c.telefone)}${c.instagram ? ` · ${escapeHtml(c.instagram)}` : ""}${c.cpf ? ` · ${escapeHtml(c.cpf)}` : ""}</span></button>`).join("") || `<p class="muted client-search-hint">Nenhum cliente encontrado.</p>`;
+  $("#clientList").innerHTML = clients.map(c => `<button class="client-item select-client" data-id="${c.id}" data-name="${escapeHtml(c.nome)}"><strong>${escapeHtml(c.nome)}</strong><span class="client-list-contact">${escapeHtml(c.telefone || "Sem telefone")}${c.cpf ? ` - ${escapeHtml(maskedCpf(c.cpf))}` : ""}</span></button>`).join("") || `<p class="muted client-search-hint">Nenhum cliente encontrado.</p>`;
 }
 
 async function loadClientLegacy(id) {

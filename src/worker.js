@@ -234,12 +234,15 @@ async function clients(db, request, url, studioId) {
   }
   if (request.method === "GET" && url.pathname === "/api/clientes") {
     const search = `%${url.searchParams.get("busca") || ""}%`;
-    const { results } = await db.prepare(`
+    const listAll = url.searchParams.get("todos") === "1";
+    const sql = `
       SELECT id,nome,telefone,instagram,cpf FROM clientes
       WHERE id_estudio=? AND (nome LIKE ? COLLATE NOCASE OR telefone LIKE ?
         OR instagram LIKE ? COLLATE NOCASE OR cpf LIKE ?)
-      ORDER BY nome LIMIT 100
-    `).bind(studioId, search, search, search, search).all();
+      ORDER BY nome COLLATE NOCASE${listAll ? "" : " LIMIT 100"}
+    `;
+    const { results } = await db.prepare(sql)
+      .bind(studioId, search, search, search, search).all();
     return json(results);
   }
   if (request.method === "GET" && /^\/api\/clientes\/\d+$/.test(url.pathname)) {
