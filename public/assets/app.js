@@ -540,22 +540,37 @@ function openStudioEditor(studioId = "") {
       <label>Instagram<input name="instagram" value="${escapeHtml(item.instagram)}"></label>
       ${item.id ? `<label class="check-label"><input name="ativo" type="checkbox" value="1" ${item.ativo ? "checked" : ""}> Estúdio ativo</label>` : ""}
       <button class="primary">${item.id ? "Salvar alterações" : "Criar estúdio e usuário"}</button>
+      <p class="form-feedback" role="alert" aria-live="polite"></p>
     </form>`;
   applyInputMasks($("#actionContent"));
   $("#actionDialog").showModal();
   $("#studioAdminForm").onsubmit = async event => {
     event.preventDefault();
     const form = event.currentTarget;
-    const values = Object.fromEntries(new FormData(form));
-    if (item.id) values.ativo = form.elements.ativo.checked;
-    await api(item.id ? `/api/admin/estudios/${item.id}` : "/api/admin/estudios", {
-      method: item.id ? "PUT" : "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(values)
-    });
-    $("#actionDialog").close();
-    toast(item.id ? "Estúdio atualizado." : "Estúdio e usuário criados.");
-    await loadStudios();
+    const button = form.querySelector("button[type='submit'],button:not([type])");
+    const feedback = $(".form-feedback", form);
+    feedback.textContent = "";
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = item.id ? "Salvando..." : "Criando...";
+    try {
+      const values = Object.fromEntries(new FormData(form));
+      if (item.id) values.ativo = form.elements.ativo.checked;
+      await api(item.id ? `/api/admin/estudios/${item.id}` : "/api/admin/estudios", {
+        method: item.id ? "PUT" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(values)
+      });
+      $("#actionDialog").close();
+      toast(item.id ? "Estúdio atualizado com sucesso." : "Estúdio e usuário criados com sucesso.");
+      await loadStudios();
+    } catch (error) {
+      feedback.textContent = error.message;
+      feedback.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
   };
 }
 
