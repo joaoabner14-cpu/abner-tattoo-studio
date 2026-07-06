@@ -1519,7 +1519,7 @@ async function api(request, env, url) {
       ).bind(id).first();
       if (!photo) return error("Foto não encontrada.", 404);
       return new Response(base64ToBytes(photo.dados_base64), {
-        headers: { "content-type": photo.mime_type, "cache-control": "no-store" }
+        headers: { "content-type": photo.mime_type, "cache-control": "private, max-age=3600" }
       });
     }
     if (request.method === "POST") {
@@ -1527,7 +1527,9 @@ async function api(request, env, url) {
       const match = String(data.imagem || "").match(
         /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/
       );
-      if (!match || match[2].length > 1400000) return error("A foto é inválida ou muito grande.");
+      const maximumLength = crmPhotoMatch[1] === "tatuagem" ? 300000 : 1400000;
+      if (!match || match[2].length > maximumLength)
+        return error("A foto é inválida ou muito grande.");
       await db.prepare(`
         INSERT INTO ${table}(${column},mime_type,dados_base64,data_atualizacao)
         VALUES(?,?,?,CURRENT_TIMESTAMP)

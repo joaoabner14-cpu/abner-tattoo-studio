@@ -771,12 +771,12 @@ async function openCrmOrderEdit(orderId) {
   $("#crmOrderForm").elements.foto.onchange = async event => {
     try {
       const image = await loadProfilePhoto(event.target.files[0]);
-      const scale = Math.min(1, 1200 / Math.max(image.width, image.height));
+      const scale = Math.min(1, 480 / Math.max(image.width, image.height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(image.width * scale);
       canvas.height = Math.round(image.height * scale);
       canvas.getContext("2d").drawImage(image,0,0,canvas.width,canvas.height);
-      photo = canvas.toDataURL("image/jpeg",.82);
+      photo = canvas.toDataURL("image/jpeg",.70);
       $("#crmTattooPreview").innerHTML = `<img src="${photo}" alt="Prévia">`;
     } catch (error) { toast(error.message); }
   };
