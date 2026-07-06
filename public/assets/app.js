@@ -545,16 +545,16 @@ async function loadStudios() {
 
 async function loadPrivacyDashboard() {
   const data = await api("/api/lgpd");
-  const requests = data.solicitacoes.map(item => `<article class="card privacy-request ${item.status === "Aberta" ? "is-open" : ""}">
-    <div><strong>${escapeHtml(item.cliente)} · ${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_solicitacao)} · prazo ${dateBr(item.data_limite)} · ${escapeHtml(item.status)}</small></div>
+  const requests = data.solicitacoes.map(item => `<article class="card privacy-request ${item.status === "Pendente" ? "is-open" : ""}">
+    <div><strong>${escapeHtml(item.cliente)} · ${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_solicitacao)} · ${escapeHtml(item.status)}</small></div>
     <button class="secondary open-client-privacy" data-id="${item.id_cliente}">Abrir cliente</button>
   </article>`).join("") || `<div class="card muted">Nenhuma solicitação registrada.</div>`;
   const audit = data.auditoria.map(item => `<div class="privacy-audit-row">
     <div><strong>${escapeHtml(item.acao)} · ${escapeHtml(item.recurso)}</strong><small>${escapeHtml(item.usuario)} · ${dateBr(item.data_evento)} · resposta ${item.resultado}</small></div>
   </div>`).join("") || `<div class="card muted">Nenhuma operação registrada.</div>`;
   $("#privacyPanel").innerHTML = `
-    <div class="stats privacy-stats"><div class="card stat"><span>Abertas</span><strong>${data.resumo.abertas}</strong></div><div class="card stat"><span>Em análise</span><strong>${data.resumo.em_analise}</strong></div><div class="card stat stat-late"><span>Prazo vencido</span><strong>${data.resumo.vencidas}</strong></div></div>
-    <div class="card privacy-contact"><strong>Canal dos titulares</strong><p>${escapeHtml(data.estudio.email_privacidade || "Não configurado")}</p><small>Aviso ${escapeHtml(data.estudio.versao_aviso_privacidade)} · retenção ${data.estudio.prazo_retencao_anos} anos</small></div>
+    <div class="stats privacy-stats"><div class="card stat"><span>Pendentes</span><strong>${data.resumo.abertas}</strong></div><div class="card stat"><span>Em andamento</span><strong>${data.resumo.em_analise}</strong></div><div class="card stat stat-late"><span>Prazo vencido</span><strong>${data.resumo.vencidas}</strong></div></div>
+    <div class="card privacy-contact"><strong>Configurações gerais</strong><p>Canal dos titulares: ${escapeHtml(data.estudio.email_privacidade || "Não configurado")}</p><small>Aviso ${escapeHtml(data.estudio.versao_aviso_privacidade)} · retenção ${data.estudio.prazo_retencao_anos ? `${data.estudio.prazo_retencao_anos} anos` : "não configurada"}</small></div>
     <h2>Solicitações dos titulares</h2><div class="privacy-request-list">${requests}</div>
     <h2>Registro de operações</h2><div class="privacy-audit">${audit}</div>`;
 }
@@ -571,6 +571,7 @@ function openStudioEditor(studioId = "") {
       <label>Endereço<textarea name="endereco">${escapeHtml(item.endereco)}</textarea></label>
       <label>Instagram<input name="instagram" value="${escapeHtml(item.instagram)}"></label>
       <label>E-mail de privacidade<input name="email_privacidade" type="email" value="${escapeHtml(item.email_privacidade)}" required></label>
+      <label>Retenção de dados em anos<input name="prazo_retencao_anos" type="number" min="0" step="1" value="${item.prazo_retencao_anos || ""}" placeholder="Não configurado"><small class="muted">Deixe vazio enquanto o estúdio não definir uma política.</small></label>
       ${item.id ? `<label class="check-label"><input name="ativo" type="checkbox" value="1" ${item.ativo ? "checked" : ""}> Estúdio ativo</label>` : ""}
       <button class="primary">${item.id ? "Salvar alterações" : "Criar estúdio e usuário"}</button>
       <p class="form-feedback" role="alert" aria-live="polite"></p>
@@ -800,12 +801,13 @@ async function loadClient(id) {
   </div>`).join("");
   const privacyConfig = privacy.configuracao;
   const privacyRequests = privacy.solicitacoes.map(item => `<form class="card lgpd-request-form" data-id="${item.id}">
-    <div class="card-head"><div><strong>${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_solicitacao)} · prazo ${dateBr(item.data_limite)}</small></div><span class="badge ${item.status === "Aberta" ? "badge-late" : ""}">${escapeHtml(item.status)}</span></div>
+    <div class="card-head"><div><strong>${escapeHtml(item.tipo)}</strong><small>Registrada em ${dateBr(item.data_solicitacao)}${item.data_conclusao ? ` · concluída em ${dateBr(item.data_conclusao)}` : ""}</small></div><span class="badge ${item.status === "Pendente" ? "badge-late" : ""}">${escapeHtml(item.status)}</span></div>
     <p>${escapeHtml(item.descricao || "Sem descrição.")}</p>
-    <label>Status<select name="status">${["Aberta","Em analise","Concluida","Recusada"].map(status => `<option ${status === item.status ? "selected" : ""}>${status}</option>`).join("")}</select></label>
-    <label>Resposta<textarea name="resposta">${escapeHtml(item.resposta)}</textarea></label>
+    <label>Status<select name="status">${[["Pendente","Pendente"],["Em andamento","Em andamento"],["Concluida","Concluída"],["Recusada","Recusada"]].map(([value,label]) => `<option value="${value}" ${value === item.status ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label>Observação interna<textarea name="observacao_interna">${escapeHtml(item.observacao_interna)}</textarea></label>
     <button class="secondary">Atualizar solicitação</button>
   </form>`).join("") || `<div class="card muted">Nenhuma solicitação LGPD registrada.</div>`;
+  const privacyHistory = privacy.historico.map(item => `<div class="privacy-history-row"><strong>${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_evento)} · ${escapeHtml(item.usuario || "Sistema")}</small><p>${escapeHtml(item.descricao)}</p></div>`).join("") || `<div class="card muted">Nenhuma alteração registrada.</div>`;
   $("#clientDetail").classList.remove("empty");
   $("#clientDetail").innerHTML = `${alerts}<div class="crm-header">
     <label class="crm-client-photo">${client.tem_foto ? `<img src="/api/crm/cliente/${id}/foto?v=${Date.now()}" alt="Foto de ${escapeHtml(client.nome)}">` : `<span>👤</span>`}<input id="crmClientPhoto" type="file" accept="image/*" hidden></label>
@@ -829,17 +831,27 @@ async function loadClient(id) {
   <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
   <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>
   <div class="tab-pane" id="crm-privacy">
-    <div class="card lgpd-notice"><strong>Canal de privacidade</strong><p>${escapeHtml(privacy.estudio.email_privacidade || "Não configurado")}</p><small>Retenção configurada: ${privacy.estudio.prazo_retencao_anos} anos · aviso ${escapeHtml(privacy.estudio.versao_aviso_privacidade)}</small></div>
     <form id="crmPrivacyForm">
-      <label>Base legal dos dados cadastrais<select name="base_cadastro">${["Execucao de contrato","Consentimento","Obrigacao legal","Legitimo interesse"].map(value => `<option ${value === privacyConfig.base_cadastro ? "selected" : ""}>${value}</option>`).join("")}</select></label>
-      <label class="check-label"><input name="aceita_marketing" type="checkbox" value="1" ${privacyConfig.aceita_marketing ? "checked" : ""}> Cliente autorizou comunicações de marketing</label>
+      <label>Base legal dos dados cadastrais<select name="base_cadastro">${[["Execucao de contrato","Execução de contrato"],["Consentimento","Consentimento"],["Obrigacao legal","Obrigação legal"],["Legitimo interesse","Legítimo interesse"]].map(([value,label]) => `<option value="${value}" ${value === privacyConfig.base_cadastro ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <small class="muted privacy-basis-help">Padrão para cadastro, agendamentos, ordens de serviço e pagamentos: Execução de contrato.</small>
+      <h2>Consentimentos</h2>
+      <div class="card consent-card">
+        <label class="check-label"><input name="aceita_marketing" type="checkbox" value="1" ${privacyConfig.aceita_marketing ? "checked" : ""}> Recebimento de mensagens promocionais</label>
+        <small>Status: ${privacyConfig.aceita_marketing ? "Autorizado" : "Não autorizado"} · autorização: ${dateBr(privacyConfig.data_consentimento_marketing) || "—"} · revogação: ${dateBr(privacyConfig.data_revogacao_marketing) || "—"} · alteração por: ${escapeHtml(privacyConfig.usuario_marketing || "—")}</small>
+      </div>
+      <div class="card consent-card">
+        <label class="check-label"><input name="autoriza_fotos_divulgacao" type="checkbox" value="1" ${privacyConfig.autoriza_fotos_divulgacao ? "checked" : ""}> Uso de fotos da tatuagem para divulgação</label>
+        <small>Status: ${privacyConfig.autoriza_fotos_divulgacao ? "Autorizado" : "Não autorizado"} · autorização: ${dateBr(privacyConfig.data_consentimento_fotos) || "—"} · revogação: ${dateBr(privacyConfig.data_revogacao_fotos) || "—"} · alteração por: ${escapeHtml(privacyConfig.usuario_fotos || "—")}</small>
+      </div>
       <input name="versao_aviso" type="hidden" value="${escapeHtml(privacy.estudio.versao_aviso_privacidade)}">
       <button class="primary">Salvar privacidade</button>
     </form>
+    <p class="muted retention-note">Prazo geral de retenção: ${privacy.estudio.prazo_retencao_anos ? `${privacy.estudio.prazo_retencao_anos} anos` : "não configurado"}.</p>
     <button class="secondary export-client-data" type="button" data-id="${id}" data-name="${escapeHtml(client.nome)}">Exportar dados do cliente</button>
-    <h2>Nova solicitação do titular</h2>
-    <form id="lgpdRequestForm"><label>Direito solicitado<select name="tipo">${["Acesso","Correcao","Anonimizacao","Bloqueio","Eliminacao","Portabilidade","Revogacao"].map(value => `<option>${value}</option>`).join("")}</select></label><label>Descrição<textarea name="descricao" required></textarea></label><button class="primary">Registrar solicitação</button></form>
-    <h2>Solicitações registradas</h2><div class="lgpd-request-list">${privacyRequests}</div>
+    <h2>Solicitações do titular</h2>
+    <form id="lgpdRequestForm"><label>Tipo<select name="tipo">${[["Acesso","Acesso"],["Correcao","Correção"],["Exclusao","Exclusão"],["Revogacao de consentimento","Revogação de consentimento"],["Portabilidade","Portabilidade"],["Outro","Outro"]].map(([value,label]) => `<option value="${value}">${label}</option>`).join("")}</select></label><label>Descrição<textarea name="descricao" required></textarea></label><button class="primary">Registrar solicitação</button></form>
+    <div class="lgpd-request-list">${privacyRequests}</div>
+    <h2>Histórico de privacidade</h2><div class="privacy-history">${privacyHistory}</div>
   </div>`;
   applyInputMasks($("#clientDetail"));
   const updateClient = async changes => {
@@ -883,7 +895,8 @@ async function loadClient(id) {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         ...Object.fromEntries(new FormData(form)),
-        aceita_marketing: form.elements.aceita_marketing.checked
+        aceita_marketing: form.elements.aceita_marketing.checked,
+        autoriza_fotos_divulgacao: form.elements.autoriza_fotos_divulgacao.checked
       })
     });
     toast("Configurações de privacidade salvas.");
@@ -1047,6 +1060,7 @@ async function openProfile() {
       <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(profile.cnpj)}"></label>
       <label>Instagram<input name="instagram" placeholder="@usuario" value="${escapeHtml(profile.instagram)}"></label>
       <label>E-mail de privacidade<input name="email_privacidade" type="email" value="${escapeHtml(profile.email_privacidade)}" required><small class="muted">Canal para solicitações dos titulares de dados.</small></label>
+      <label>Retenção de dados em anos<input name="prazo_retencao_anos" type="number" min="0" step="1" value="${profile.prazo_retencao_anos || ""}" placeholder="Não configurado"><small class="muted">Defina conforme a política geral do estúdio.</small></label>
       <button class="primary">Salvar informações</button>
     </form>
     <div class="profile-password">

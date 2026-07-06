@@ -1336,7 +1336,7 @@ async function clientCrm(db, id, studioId) {
   });
 }
 
-async function clientPrivacy(db, request, url, studioId) {
+async function clientPrivacy(db, request, url, studioId, userId) {
   const match = url.pathname.match(
     /^\/api\/clientes\/(\d+)\/lgpd(?:\/(exportar|solicitacoes)(?:\/(\d+))?)?$/
   );
@@ -1348,6 +1348,7 @@ async function clientPrivacy(db, request, url, studioId) {
     "SELECT * FROM clientes WHERE id=? AND id_estudio=?"
   ).bind(clientId, studioId).first();
   if (!client) return error("Cliente não encontrado.", 404);
+
   if (request.method === "GET" && action === "exportar") {
     const { results: appointments } = await db.prepare(`
       SELECT data_hora,valor_orcado,status,faltou,observacoes,data_criacao
@@ -1358,6 +1359,12 @@ async function clientPrivacy(db, request, url, studioId) {
         os.status,os.valor_tatuagem,os.data_execucao,os.data_criacao
       FROM ordem_servico os WHERE os.id_cliente=? AND os.id_estudio=?
       ORDER BY os.data_criacao
+    `).bind(clientId, studioId).all();
+    const { results: financial } = await db.prepare(`
+      SELECT f.id_os,f.valor_orcado,f.valor_sinal,f.valor_adicional,
+        f.valor_desconto,f.valor_final,f.forma_pagamento,f.status,f.data_criacao
+      FROM financeiro f WHERE f.id_cliente=? AND f.id_estudio=?
+      ORDER BY f.data_criacao
     `).bind(clientId, studioId).all();
     const { results: payments } = await db.prepare(`
       SELECT fm.tipo,fm.valor,fm.forma_pagamento,fm.observacao,
@@ -1376,8 +1383,23 @@ async function clientPrivacy(db, request, url, studioId) {
     const privacy = await db.prepare(
       "SELECT * FROM lgpd_clientes WHERE id_cliente=? AND id_estudio=?"
     ).bind(clientId, studioId).first();
+    const { results: requests } = await db.prepare(`
+      SELECT tipo,descricao,status,observacao_interna,data_solicitacao,data_conclusao
+      FROM lgpd_solicitacoes WHERE id_cliente=? AND id_estudio=?
+      ORDER BY data_solicitacao
+    `).bind(clientId, studioId).all();
+    await db.prepare(`
+      INSERT INTO lgpd_historico(id_estudio,id_cliente,id_usuario,tipo,descricao)
+      VALUES(?,?,?,'Exportacao','Dados do cliente exportados em formato JSON.')
+    `).bind(studioId, clientId, userId).run();
+    const { results: privacyHistory } = await db.prepare(`
+      SELECT lh.tipo,lh.descricao,lh.data_evento,u.nome usuario
+      FROM lgpd_historico lh LEFT JOIN usuarios u ON u.id=lh.id_usuario
+      WHERE lh.id_cliente=? AND lh.id_estudio=? ORDER BY lh.data_evento,lh.id
+    `).bind(clientId, studioId).all();
     const studio = await db.prepare(`
-      SELECT nome_estudio,cnpj,email_privacidade,versao_aviso_privacidade
+      SELECT nome_estudio,cnpj,email_privacidade,versao_aviso_privacidade,
+        prazo_retencao_anos
       FROM estudios WHERE id=?
     `).bind(studioId).first();
     const { id_estudio, historico_tatuagens, historico_financeiro, ...personalData } = client;
@@ -1385,82 +1407,139 @@ async function clientPrivacy(db, request, url, studioId) {
       exportado_em: new Date().toISOString(), controlador: studio,
       titular: personalData, privacidade: privacy || {
         base_cadastro: "Execucao de contrato", aceita_marketing: 0,
+        autoriza_fotos_divulgacao: 0,
         versao_aviso: studio?.versao_aviso_privacidade || "1.0"
       },
       agendamentos: appointments, ordens_servico: orders,
-      pagamentos: payments, crediario: installments
+      financeiro: financial, pagamentos: payments, crediario: installments,
+      solicitacoes_privacidade: requests, registros_privacidade: privacyHistory
     });
   }
+
   if (request.method === "GET" && !action) {
-    const privacy = await db.prepare(
-      "SELECT * FROM lgpd_clientes WHERE id_cliente=? AND id_estudio=?"
-    ).bind(clientId, studioId).first();
+    const privacy = await db.prepare(`
+      SELECT lc.*,um.nome usuario_marketing,uf.nome usuario_fotos
+      FROM lgpd_clientes lc
+      LEFT JOIN usuarios um ON um.id=lc.id_usuario_marketing
+      LEFT JOIN usuarios uf ON uf.id=lc.id_usuario_fotos
+      WHERE lc.id_cliente=? AND lc.id_estudio=?
+    `).bind(clientId, studioId).first();
     const { results: requests } = await db.prepare(`
       SELECT * FROM lgpd_solicitacoes
       WHERE id_cliente=? AND id_estudio=? ORDER BY data_solicitacao DESC
     `).bind(clientId, studioId).all();
+    const { results: history } = await db.prepare(`
+      SELECT lh.*,u.nome usuario
+      FROM lgpd_historico lh LEFT JOIN usuarios u ON u.id=lh.id_usuario
+      WHERE lh.id_cliente=? AND lh.id_estudio=?
+      ORDER BY lh.data_evento DESC,lh.id DESC
+    `).bind(clientId, studioId).all();
     const studio = await db.prepare(`
-      SELECT email_privacidade,versao_aviso_privacidade,prazo_retencao_anos
+      SELECT versao_aviso_privacidade,prazo_retencao_anos
       FROM estudios WHERE id=?
     `).bind(studioId).first();
     return json({
       configuracao: privacy || {
         base_cadastro: "Execucao de contrato", aceita_marketing: 0,
+        autoriza_fotos_divulgacao: 0,
         versao_aviso: studio?.versao_aviso_privacidade || "1.0"
       },
-      solicitacoes: requests, estudio: studio
+      solicitacoes: requests, historico: history, estudio: studio
     });
   }
+
   if (request.method === "PUT" && !action) {
     const data = await body(request);
     const marketing = data.aceita_marketing === true || data.aceita_marketing === 1 ||
       data.aceita_marketing === "1";
+    const photos = data.autoriza_fotos_divulgacao === true ||
+      data.autoriza_fotos_divulgacao === 1 ||
+      data.autoriza_fotos_divulgacao === "1";
     const previous = await db.prepare(
-      "SELECT aceita_marketing FROM lgpd_clientes WHERE id_cliente=? AND id_estudio=?"
+      "SELECT * FROM lgpd_clientes WHERE id_cliente=? AND id_estudio=?"
     ).bind(clientId, studioId).first();
-    const consentDate = marketing && !previous?.aceita_marketing ? saoPauloDate() : null;
-    const revokeDate = !marketing && previous?.aceita_marketing ? saoPauloDate() : null;
-    await db.prepare(`
+    const now = new Date().toISOString();
+    const marketingChanged = Boolean(previous?.aceita_marketing) !== marketing;
+    const photosChanged = Boolean(previous?.autoriza_fotos_divulgacao) !== photos;
+    const statements = [db.prepare(`
       INSERT INTO lgpd_clientes
         (id_cliente,id_estudio,base_cadastro,aceita_marketing,
-          data_consentimento_marketing,data_revogacao_marketing,versao_aviso)
-      VALUES(?,?,?,?,?,?,?)
+          data_consentimento_marketing,data_revogacao_marketing,id_usuario_marketing,
+          autoriza_fotos_divulgacao,data_consentimento_fotos,data_revogacao_fotos,
+          id_usuario_fotos,versao_aviso)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id_cliente) DO UPDATE SET
         base_cadastro=excluded.base_cadastro,
         aceita_marketing=excluded.aceita_marketing,
-        data_consentimento_marketing=COALESCE(excluded.data_consentimento_marketing,
-          lgpd_clientes.data_consentimento_marketing),
-        data_revogacao_marketing=COALESCE(excluded.data_revogacao_marketing,
-          lgpd_clientes.data_revogacao_marketing),
+        data_consentimento_marketing=excluded.data_consentimento_marketing,
+        data_revogacao_marketing=excluded.data_revogacao_marketing,
+        id_usuario_marketing=excluded.id_usuario_marketing,
+        autoriza_fotos_divulgacao=excluded.autoriza_fotos_divulgacao,
+        data_consentimento_fotos=excluded.data_consentimento_fotos,
+        data_revogacao_fotos=excluded.data_revogacao_fotos,
+        id_usuario_fotos=excluded.id_usuario_fotos,
         versao_aviso=excluded.versao_aviso,data_atualizacao=CURRENT_TIMESTAMP
     `).bind(clientId, studioId, data.base_cadastro || "Execucao de contrato",
-      marketing ? 1 : 0, consentDate, revokeDate, data.versao_aviso || "1.0").run();
+      marketing ? 1 : 0,
+      marketing ? (marketingChanged ? now : previous?.data_consentimento_marketing || now) : null,
+      marketing ? null : (marketingChanged ? now : previous?.data_revogacao_marketing || null),
+      marketingChanged ? userId : previous?.id_usuario_marketing || null,
+      photos ? 1 : 0,
+      photos ? (photosChanged ? now : previous?.data_consentimento_fotos || now) : null,
+      photos ? null : (photosChanged ? now : previous?.data_revogacao_fotos || null),
+      photosChanged ? userId : previous?.id_usuario_fotos || null,
+      data.versao_aviso || "1.0")];
+    if (marketingChanged) statements.push(db.prepare(`
+      INSERT INTO lgpd_historico(id_estudio,id_cliente,id_usuario,tipo,descricao)
+      VALUES(?,?,?,'Consentimento marketing',?)
+    `).bind(studioId, clientId, userId,
+      marketing ? "Recebimento de mensagens promocionais autorizado."
+        : "Recebimento de mensagens promocionais revogado."));
+    if (photosChanged) statements.push(db.prepare(`
+      INSERT INTO lgpd_historico(id_estudio,id_cliente,id_usuario,tipo,descricao)
+      VALUES(?,?,?,'Consentimento fotos',?)
+    `).bind(studioId, clientId, userId,
+      photos ? "Uso de fotos da tatuagem para divulgação autorizado."
+        : "Uso de fotos da tatuagem para divulgação revogado."));
+    await db.batch(statements);
     return json({ ok: true });
   }
+
   if (request.method === "POST" && action === "solicitacoes") {
     const data = await body(request);
     const allowed = [
-      "Acesso", "Correcao", "Anonimizacao", "Bloqueio",
-      "Eliminacao", "Portabilidade", "Revogacao"
+      "Acesso", "Correcao", "Exclusao",
+      "Revogacao de consentimento", "Portabilidade", "Outro"
     ];
     if (!allowed.includes(data.tipo)) return error("Tipo de solicitação inválido.");
     const created = await db.prepare(`
       INSERT INTO lgpd_solicitacoes(id_estudio,id_cliente,tipo,descricao)
       VALUES(?,?,?,?)
     `).bind(studioId, clientId, data.tipo, data.descricao || "").run();
+    await db.prepare(`
+      INSERT INTO lgpd_historico(id_estudio,id_cliente,id_usuario,tipo,descricao)
+      VALUES(?,?,?,'Solicitacao criada',?)
+    `).bind(studioId, clientId, userId,
+      `${data.tipo}: ${data.descricao || "Sem descrição."}`).run();
     return json({ ok: true, id: created.meta.last_row_id }, 201);
   }
+
   if (request.method === "PUT" && action === "solicitacoes" && requestId) {
     const data = await body(request);
-    const allowed = ["Aberta", "Em analise", "Concluida", "Recusada"];
+    const allowed = ["Pendente", "Em andamento", "Concluida", "Recusada"];
     if (!allowed.includes(data.status)) return error("Status inválido.");
-    const completed = ["Concluida", "Recusada"].includes(data.status)
-      ? "CURRENT_TIMESTAMP" : "NULL";
     const result = await db.prepare(`
-      UPDATE lgpd_solicitacoes SET status=?,resposta=?,data_conclusao=${completed}
+      UPDATE lgpd_solicitacoes SET status=?,observacao_interna=?,
+        data_conclusao=CASE WHEN ? IN ('Concluida','Recusada')
+          THEN COALESCE(data_conclusao,CURRENT_TIMESTAMP) ELSE NULL END
       WHERE id=? AND id_cliente=? AND id_estudio=?
-    `).bind(data.status, data.resposta || "", requestId, clientId, studioId).run();
+    `).bind(data.status, data.observacao_interna || "", data.status,
+      requestId, clientId, studioId).run();
     if (!result.meta.changes) return error("Solicitação não encontrada.", 404);
+    await db.prepare(`
+      INSERT INTO lgpd_historico(id_estudio,id_cliente,id_usuario,tipo,descricao)
+      VALUES(?,?,?,'Solicitacao atualizada',?)
+    `).bind(studioId, clientId, userId, `Status alterado para ${data.status}.`).run();
     return json({ ok: true });
   }
   return error("Operação LGPD não encontrada.", 404);
@@ -1545,12 +1624,14 @@ async function studioAdministration(db, request, url, user) {
     const credentials = await passwordCredentials(data.senha);
     const studio = await db.prepare(`
       INSERT INTO estudios
-        (nome_estudio,nome_responsavel,cnpj,endereco,instagram,email_privacidade)
-      VALUES(?,?,?,?,?,?)
+        (nome_estudio,nome_responsavel,cnpj,endereco,instagram,email_privacidade,
+          prazo_retencao_anos)
+      VALUES(?,?,?,?,?,?,?)
     `).bind(required(data.nome_estudio, "nome do estúdio"),
       required(data.nome_usuario, "nome do responsável"),
       String(data.cnpj || "").replace(/\D/g, ""), data.endereco || "",
-      data.instagram || "", emailAddress(data.email_privacidade)).run();
+      data.instagram || "", emailAddress(data.email_privacidade),
+      Math.max(0, integer(data.prazo_retencao_anos))).run();
     try {
       const account = await db.prepare(`
         INSERT INTO usuarios
@@ -1588,13 +1669,13 @@ async function studioAdministration(db, request, url, user) {
     const statements = [
       db.prepare(`
         UPDATE estudios SET nome_estudio=?,nome_responsavel=?,cnpj=?,endereco=?,
-          instagram=?,email_privacidade=?,ativo=?,
+          instagram=?,email_privacidade=?,prazo_retencao_anos=?,ativo=?,
           data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
       `).bind(required(data.nome_estudio, "nome do estúdio"),
         required(data.nome_usuario, "nome do responsável"),
         String(data.cnpj || "").replace(/\D/g, ""), data.endereco || "",
         data.instagram || "", emailAddress(data.email_privacidade),
-        active ? 1 : 0, studioId),
+        Math.max(0, integer(data.prazo_retencao_anos)), active ? 1 : 0, studioId),
       db.prepare("UPDATE usuarios SET login=?,nome=?,ativo=? WHERE id=?")
         .bind(login, required(data.nome_usuario, "nome do responsável"),
           active ? 1 : 0, account.id)
@@ -1802,7 +1883,7 @@ async function api(request, env, url, user) {
       SELECT ls.*,c.nome cliente
       FROM lgpd_solicitacoes ls JOIN clientes c ON c.id=ls.id_cliente
       WHERE ls.id_estudio=?
-      ORDER BY CASE WHEN ls.status IN ('Aberta','Em analise') THEN 0 ELSE 1 END,
+      ORDER BY CASE WHEN ls.status IN ('Pendente','Em andamento') THEN 0 ELSE 1 END,
         ls.data_limite,ls.data_solicitacao DESC LIMIT 150
     `).bind(studioId).all();
     const { results: audit } = await db.prepare(`
@@ -1817,16 +1898,16 @@ async function api(request, env, url, user) {
     return json({
       estudio: studio, solicitacoes: requests, auditoria: audit,
       resumo: {
-        abertas: requests.filter(item => item.status === "Aberta").length,
-        em_analise: requests.filter(item => item.status === "Em analise").length,
+        abertas: requests.filter(item => item.status === "Pendente").length,
+        em_analise: requests.filter(item => item.status === "Em andamento").length,
         vencidas: requests.filter(item =>
-          ["Aberta", "Em analise"].includes(item.status) &&
+          ["Pendente", "Em andamento"].includes(item.status) && item.data_limite &&
           item.data_limite.slice(0, 10) < saoPauloDate()).length
       }
     });
   }
   if (/^\/api\/clientes\/\d+\/lgpd(?:\/|$)/.test(url.pathname)) {
-    const privacyResponse = await clientPrivacy(db, request, url, studioId);
+    const privacyResponse = await clientPrivacy(db, request, url, studioId, user.id);
     if (privacyResponse) return privacyResponse;
   }
   const crmMatch = url.pathname.match(/^\/api\/clientes\/(\d+)\/crm$/);
@@ -2072,12 +2153,14 @@ async function api(request, env, url, user) {
           .bind(required(data.nome, "nome"), photo || null, user.id),
         db.prepare(`
           UPDATE estudios SET nome_estudio=?,nome_responsavel=?,endereco=?,cnpj=?,
-            instagram=?,email_privacidade=?,data_atualizacao=CURRENT_TIMESTAMP
+            instagram=?,email_privacidade=?,prazo_retencao_anos=?,
+            data_atualizacao=CURRENT_TIMESTAMP
           WHERE id=?
         `).bind(required(data.nome_estudio, "nome do estúdio"),
           required(data.nome, "nome"), data.endereco || "",
           String(data.cnpj || "").replace(/\D/g, ""), data.instagram || "",
-          emailAddress(data.email_privacidade), studioId)
+          emailAddress(data.email_privacidade),
+          Math.max(0, integer(data.prazo_retencao_anos)), studioId)
       ]);
       return json({ ok: true });
     }
