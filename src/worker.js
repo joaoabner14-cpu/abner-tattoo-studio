@@ -1377,7 +1377,7 @@ async function derivePassword(password, salt, iterations) {
 async function passwordCredentials(password) {
   if (String(password || "").length < 8)
     throw new Error("A senha deve ter pelo menos 8 caracteres.");
-  const iterations = 310000;
+  const iterations = 100000;
   const salt = crypto.getRandomValues(new Uint8Array(32));
   const hash = await derivePassword(String(password), salt, iterations);
   return {
@@ -1536,7 +1536,7 @@ async function authApi(db, request, url) {
     const salt = account ? base64ToBytes(account.senha_salt) : new Uint8Array(32);
     const expected = account ? base64ToBytes(account.senha_hash) : new Uint8Array(32);
     const derived = await derivePassword(String(data.senha || ""), salt,
-      account?.senha_iteracoes || 310000);
+      account?.senha_iteracoes || 100000);
     const valid = Boolean(account) && constantEqual(derived, expected);
     await db.prepare("INSERT INTO tentativas_login(login,ip,sucesso) VALUES(?,?,?)")
       .bind(login || "-", ip, valid ? 1 : 0).run();
@@ -1916,7 +1916,7 @@ async function api(request, env, url, user) {
     if (password !== String(data.confirmar_senha || "")) {
       return error("As senhas informadas não são iguais.");
     }
-    const iterations = 310000;
+    const iterations = 100000;
     const salt = crypto.getRandomValues(new Uint8Array(32));
     const hash = await derivePassword(password, salt, iterations);
     await db.batch([
