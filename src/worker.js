@@ -224,8 +224,10 @@ async function sendDailyWhatsAppSummaries(env) {
 
 async function listAppointments(db, url, studioId, studioName, enabledModules) {
   const { results } = await db.prepare(`
-    SELECT a.id, a.data_hora, a.status, c.nome, c.telefone
+    SELECT a.id, a.data_hora, a.status, c.nome, c.telefone,
+      a.id_tatuador,u.nome tatuador,u.cor_agenda
     FROM agendamentos a JOIN clientes c ON c.id = a.id_cliente
+    LEFT JOIN usuarios u ON u.id=a.id_tatuador AND u.id_estudio=a.id_estudio
     WHERE a.id_estudio=?
     ORDER BY a.data_hora
   `).bind(studioId).all();
@@ -256,9 +258,14 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
       .map(x => ({
         id: `agendamento-${x.id}`,
-        title: x.nome,
+        title: `${x.nome}${x.tatuador ? ` · ${x.tatuador}` : ""}`,
         start: x.data_hora.replace(" ", "T"),
-        extendedProps: { tipo: "agendamento", id_agendamento: x.id }
+        backgroundColor: x.cor_agenda || "#735f3c",
+        borderColor: x.cor_agenda || "#735f3c",
+        extendedProps: {
+          tipo: "agendamento", id_agendamento: x.id,
+          id_tatuador: x.id_tatuador, tatuador: x.tatuador
+        }
       }));
     const today = saoPauloDate();
     const payments = installments.map(x => {
@@ -328,6 +335,7 @@ Responda NÃO para cancelar ou solicite um REAGENDAMENTO.
     const key = brDateTime(date);
     (grouped[key] ||= []).push({
       id_agendamento: row.id, hora: row.data_hora.slice(11, 16), nome: row.nome,
+      tatuador: row.tatuador || "",
       status: row.status, cancelado: row.status.toLowerCase() === "cancelado",
       eh_amanha: date === tomorrow,
       link_whatsapp: `https://wa.me/55${phone}?text=${message}`
@@ -394,12 +402,27 @@ async function clients(db, request, url, studioId) {
   return null;
 }
 
-async function createAppointment(db, request, studioId) {
+async function createAppointment(db, request, studioId, user) {
   const data = await body(request);
   const nome = required(data.nome, "nome");
   const telefone = required(data.telefone, "telefone");
   const date = required(data.data, "data");
   const time = required(data.hora, "hora");
+  let tattooerId = integer(data.id_tatuador);
+  if (!tattooerId && user.perfil_acesso === "TATUADOR") tattooerId = Number(user.id);
+  if (tattooerId) {
+    const tattooer = await db.prepare(`
+      SELECT id FROM usuarios WHERE id=? AND id_estudio=? AND ativo=1
+    `).bind(tattooerId, studioId).first();
+    if (!tattooer) return error("Tatuador não encontrado neste estúdio.", 404);
+    const conflict = await db.prepare(`
+      SELECT id FROM agendamentos
+      WHERE id_estudio=? AND id_tatuador=? AND data_hora=?
+        AND status NOT IN ('Cancelado','Concluido')
+      LIMIT 1
+    `).bind(studioId, tattooerId, `${date} ${time}:00`).first();
+    if (conflict) return error("Este profissional já possui um agendamento neste horário.");
+  }
   let clientId = integer(data.id_cliente);
   if (clientId) {
     const selected = await db.prepare(
@@ -421,8 +444,10 @@ async function createAppointment(db, request, studioId) {
   }
   const value = number(data.valor);
   const appointment = await db.prepare(`
-    INSERT INTO agendamentos(id_estudio,id_cliente,data_hora,valor_orcado) VALUES(?,?,?,?)
-  `).bind(studioId, clientId, `${date} ${time}:00`, value).run();
+    INSERT INTO agendamentos
+      (id_estudio,id_cliente,id_tatuador,data_hora,valor_orcado)
+    VALUES(?,?,?,?,?)
+  `).bind(studioId, clientId, tattooerId || null, `${date} ${time}:00`, value).run();
   const appointmentId = appointment.meta.last_row_id;
   const order = await db.prepare(`
     INSERT INTO ordem_servico(id_estudio,id_cliente,id_agendamento,status,valor_tatuagem)
@@ -439,6 +464,7 @@ async function openOrder(db, url, studioId, enabledModules) {
   const id = integer(url.searchParams.get("id"));
   const row = await db.prepare(`
     SELECT a.id id_agendamento, a.data_hora, a.status status_agendamento,a.faltou,
+      a.id_tatuador,
       c.id id_cliente, c.nome, c.telefone, c.cidade, c.data_nascimento, c.instagram,
       c.cpf, c.rg, c.observacoes, c.status status_cliente, c.data_cadastro,
       EXISTS(SELECT 1 FROM crm_fotos_clientes fc
@@ -1762,7 +1788,8 @@ async function studioDataExport(db, studioId) {
   const studio = await db.prepare("SELECT * FROM estudios WHERE id=?").bind(studioId).first();
   if (!studio) return null;
   const queries = {
-    usuarios: `SELECT id,login,nome,ativo,data_criacao,ultimo_login,foto_perfil,papel
+    usuarios: `SELECT id,login,nome,ativo,data_criacao,ultimo_login,foto_perfil,papel,
+        perfil_acesso,cor_agenda
       FROM usuarios WHERE id_estudio=?`,
     modulos: "SELECT * FROM estudio_modulos WHERE id_estudio=? ORDER BY modulo",
     assinatura: "SELECT * FROM assinaturas_estudios WHERE id_estudio=?",
@@ -1820,6 +1847,78 @@ async function studioDataExport(db, studioId) {
 
 async function studioAdministration(db, request, url, user) {
   if (user.papel !== "SUPERADMIN") return error("Acesso restrito ao administrador geral.", 403);
+  const usersMatch = url.pathname.match(
+    /^\/api\/admin\/estudios\/(\d+)\/usuarios(?:\/(\d+))?$/
+  );
+  if (usersMatch) {
+    const studioId = integer(usersMatch[1]);
+    const userId = integer(usersMatch[2]);
+    const studio = await db.prepare("SELECT id,nome_estudio FROM estudios WHERE id=?")
+      .bind(studioId).first();
+    if (!studio) return error("Estúdio não encontrado.", 404);
+    if (request.method === "GET" && !userId) {
+      const { results } = await db.prepare(`
+        SELECT id,login,nome,ativo,perfil_acesso,cor_agenda,ultimo_login,data_criacao
+        FROM usuarios WHERE id_estudio=?
+        ORDER BY CASE perfil_acesso WHEN 'ADMINISTRADOR' THEN 0
+          WHEN 'TATUADOR' THEN 1 ELSE 2 END,nome COLLATE NOCASE
+      `).bind(studioId).all();
+      return json({ estudio: studio, usuarios: results });
+    }
+    if (request.method === "POST" && !userId) {
+      const data = await body(request);
+      const login = required(data.login, "usuário").toLowerCase();
+      const duplicate = await db.prepare(
+        "SELECT id FROM usuarios WHERE login=? COLLATE NOCASE"
+      ).bind(login).first();
+      if (duplicate) return error("Este usuário de acesso já está em uso.");
+      const credentials = await passwordCredentials(data.senha);
+      const profile = ["ADMINISTRADOR", "TATUADOR", "RECEPCAO"]
+        .includes(data.perfil_acesso) ? data.perfil_acesso : "TATUADOR";
+      const color = /^#[0-9a-f]{6}$/i.test(data.cor_agenda || "")
+        ? data.cor_agenda : "#d5a75b";
+      const created = await db.prepare(`
+        INSERT INTO usuarios
+          (id_estudio,login,nome,senha_salt,senha_hash,senha_iteracoes,papel,
+            perfil_acesso,cor_agenda)
+        VALUES(?,?,?,?,?,?,'ADMIN_ESTUDIO',?,?)
+      `).bind(studioId, login, required(data.nome, "nome"), credentials.salt,
+        credentials.hash, credentials.iterations, profile, color).run();
+      return json({ ok: true, id: created.meta.last_row_id }, 201);
+    }
+    if (request.method === "PUT" && userId) {
+      const data = await body(request);
+      const existing = await db.prepare(
+        "SELECT id,papel FROM usuarios WHERE id=? AND id_estudio=?"
+      ).bind(userId, studioId).first();
+      if (!existing) return error("Usuário não encontrado.", 404);
+      const login = required(data.login, "usuário").toLowerCase();
+      const duplicate = await db.prepare(
+        "SELECT id FROM usuarios WHERE login=? COLLATE NOCASE AND id<>?"
+      ).bind(login, userId).first();
+      if (duplicate) return error("Este usuário de acesso já está em uso.");
+      const profile = ["ADMINISTRADOR", "TATUADOR", "RECEPCAO"]
+        .includes(data.perfil_acesso) ? data.perfil_acesso : "TATUADOR";
+      const color = /^#[0-9a-f]{6}$/i.test(data.cor_agenda || "")
+        ? data.cor_agenda : "#d5a75b";
+      const active = data.ativo === true || data.ativo === 1 || data.ativo === "1";
+      const statements = [db.prepare(`
+        UPDATE usuarios SET login=?,nome=?,perfil_acesso=?,cor_agenda=?,ativo=?
+        WHERE id=? AND id_estudio=?
+      `).bind(login, required(data.nome, "nome"), profile, color,
+        active ? 1 : 0, userId, studioId)];
+      if (data.senha) {
+        const credentials = await passwordCredentials(data.senha);
+        statements.push(db.prepare(`
+          UPDATE usuarios SET senha_salt=?,senha_hash=?,senha_iteracoes=? WHERE id=?
+        `).bind(credentials.salt, credentials.hash, credentials.iterations, userId));
+      }
+      if (!active) statements.push(
+        db.prepare("UPDATE sessoes SET revogada=1 WHERE id_usuario=?").bind(userId));
+      await db.batch(statements);
+      return json({ ok: true });
+    }
+  }
   const exportMatch = url.pathname.match(/^\/api\/admin\/estudios\/(\d+)\/exportar$/);
   if (exportMatch && request.method === "GET") {
     const exported = await studioDataExport(db, integer(exportMatch[1]));
@@ -1904,6 +2003,8 @@ async function studioAdministration(db, request, url, user) {
     const { results } = await db.prepare(`
       SELECT e.*,u.id id_usuario,u.nome nome_usuario,u.login,u.ativo usuario_ativo,
         (SELECT COUNT(*) FROM clientes c WHERE c.id_estudio=e.id) total_clientes,
+        (SELECT COUNT(*) FROM usuarios ux
+          WHERE ux.id_estudio=e.id AND ux.ativo=1) total_usuarios,
         COALESCE((SELECT GROUP_CONCAT(em.modulo) FROM estudio_modulos em
           WHERE em.id_estudio=e.id AND em.habilitado=1),'') modulos_habilitados,
         ae.valor_mensal,ae.dia_vencimento,ae.status status_assinatura,
@@ -2064,6 +2165,7 @@ async function currentUser(db, request) {
   if (!token) return null;
   const row = await db.prepare(`
     SELECT u.id,u.login,u.nome,u.foto_perfil,u.id_estudio,u.papel,
+      u.perfil_acesso,u.cor_agenda,
       e.nome_estudio,e.ativo estudio_ativo,s.id id_sessao,
       COALESCE((SELECT GROUP_CONCAT(em.modulo) FROM estudio_modulos em
         WHERE em.id_estudio=u.id_estudio AND em.habilitado=1),'') modulos
@@ -2105,6 +2207,7 @@ async function authApi(db, request, url) {
     if (!user) return authResponse({ authenticated: false }, 401);
     return authResponse({ authenticated: true, user: {
       id: user.id, login: user.login, nome: user.nome, papel: user.papel,
+      perfil_acesso: user.perfil_acesso, cor_agenda: user.cor_agenda,
       id_estudio: user.id_estudio, nome_estudio: user.nome_estudio,
       modulos: String(user.modulos || "").split(",").filter(Boolean)
     } });
@@ -2255,7 +2358,8 @@ function requiredModules(pathname) {
     pathname.startsWith("/api/crediario")) return ["financeiro"];
   if (pathname.startsWith("/api/clientes") || pathname.startsWith("/api/crm"))
     return ["clientes"];
-  if (pathname.startsWith("/api/agendamentos") || pathname === "/api/os" ||
+  if (pathname === "/api/tatuadores" || pathname.startsWith("/api/agendamentos") ||
+    pathname === "/api/os" ||
     /^\/api\/os\//.test(pathname)) return ["agenda"];
   return [];
 }
@@ -2549,10 +2653,12 @@ async function api(request, env, url, user) {
         photo.length > 300000)) {
         return error("A foto de perfil é inválida ou muito grande.");
       }
-      await db.batch([
+      const statements = [
         db.prepare("UPDATE usuarios SET nome=?,foto_perfil=? WHERE id=?")
-          .bind(required(data.nome, "nome"), photo || null, user.id),
-        db.prepare(`
+          .bind(required(data.nome, "nome"), photo || null, user.id)
+      ];
+      if (user.papel === "SUPERADMIN" || user.perfil_acesso === "ADMINISTRADOR") {
+        statements.push(db.prepare(`
           UPDATE estudios SET nome_estudio=?,nome_responsavel=?,endereco=?,cnpj=?,
             instagram=?,email_privacidade=?,prazo_retencao_anos=?,
             whatsapp_alertas=?,alertas_whatsapp_ativos=?,horario_resumo_whatsapp=?,
@@ -2568,8 +2674,9 @@ async function api(request, env, url, user) {
             data.alertas_whatsapp_ativos === "1" ? 1 : 0,
           /^\d{2}:\d{2}$/.test(String(data.horario_resumo_whatsapp || ""))
             ? data.horario_resumo_whatsapp : "08:00",
-          studioId)
-      ]);
+          studioId));
+      }
+      await db.batch(statements);
       return json({ ok: true });
     }
   }
@@ -2615,10 +2722,24 @@ async function api(request, env, url, user) {
   }
   if (request.method === "GET" && url.pathname === "/api/agendamentos")
     return listAppointments(db, url, studioId, user.nome_estudio, enabledModules);
+  if (request.method === "GET" && url.pathname === "/api/tatuadores") {
+    const { results } = await db.prepare(`
+      SELECT id,nome,cor_agenda,perfil_acesso FROM usuarios
+      WHERE id_estudio=? AND ativo=1 AND perfil_acesso IN ('ADMINISTRADOR','TATUADOR')
+      ORDER BY nome COLLATE NOCASE
+    `).bind(studioId).all();
+    return json(results);
+  }
   if (request.method === "POST" && url.pathname === "/api/agendamentos")
-    return createAppointment(db, request, studioId);
+    return createAppointment(db, request, studioId, user);
   if (request.method === "PUT" && /^\/api\/agendamentos\/\d+$/.test(url.pathname)) {
     const data = await body(request);
+    const tattooerId = integer(data.id_tatuador);
+    const tattooer = await db.prepare(`
+      SELECT id FROM usuarios WHERE id=? AND id_estudio=? AND ativo=1
+        AND perfil_acesso IN ('ADMINISTRADOR','TATUADOR')
+    `).bind(tattooerId, studioId).first();
+    if (!tattooer) return error("Selecione um profissional ativo deste estúdio.");
     const missed = data.status === "Falta";
     const status = data.status === "Finalizado" ? "Concluido" : missed ? "Cancelado" : data.status;
     const allowedStatuses = ["Agendado", "Confirmado", "Concluido", "Cancelado", "Remarcado"];
@@ -2636,10 +2757,18 @@ async function api(request, env, url, user) {
        WHERE id=? AND id_estudio=?`
     ).bind(appointmentId, studioId).first();
     if (!previous) return error("Agendamento não encontrado.", 404);
+    const conflict = await db.prepare(`
+      SELECT id FROM agendamentos
+      WHERE id_estudio=? AND id_tatuador=? AND data_hora=? AND id<>?
+        AND status NOT IN ('Cancelado','Concluido')
+      LIMIT 1
+    `).bind(studioId, tattooerId, `${data.data} ${data.hora}:00`,
+      appointmentId).first();
+    if (conflict) return error("Este profissional já possui um agendamento neste horário.");
     const statements = [
-      db.prepare(`UPDATE agendamentos SET data_hora=?,status=?,faltou=?
+      db.prepare(`UPDATE agendamentos SET data_hora=?,status=?,faltou=?,id_tatuador=?
         WHERE id=? AND id_estudio=?`)
-        .bind(`${data.data} ${data.hora}:00`, status, missed ? 1 : 0,
+        .bind(`${data.data} ${data.hora}:00`, status, missed ? 1 : 0, tattooerId,
           appointmentId, studioId),
       db.prepare(`UPDATE ordem_servico SET status=?
         WHERE id_agendamento=? AND id_estudio=?`)

@@ -119,7 +119,7 @@ async function loadAgenda() {
     <article class="card appointment-group"><div class="card-head"><strong>${date}</strong><span class="badge">${items.length}</span></div>
     <div class="appointment-items">${items.map(item => `<div class="appointment-entry">
       <button class="appointment-main open-order" data-id="${item.id_agendamento}">
-        <span class="appointment-person"><strong>${item.hora}</strong><span>·</span><span class="appointment-name">${escapeHtml(item.nome)}</span></span>
+        <span class="appointment-person"><strong>${item.hora}</strong><span>·</span><span class="appointment-name">${escapeHtml(item.nome)}${item.tatuador ? ` · ${escapeHtml(item.tatuador)}` : ""}</span></span>
         <span class="badge">${escapeHtml(item.status)}</span>
       </button>
       ${item.eh_amanha && !item.cancelado ? `<a class="primary appointment-confirm" target="_blank" rel="noopener" href="${item.link_whatsapp}">Confirmar presença</a>` : ""}
@@ -549,6 +549,7 @@ async function loadStudios() {
         <span class="badge ${item.ativo ? "" : "badge-late"}">${item.ativo ? "Ativo" : "Inativo"}</span></div>
       <div class="studio-admin-details">
         <span>Usuário<strong>${escapeHtml(item.login || "—")}</strong></span>
+        <span>Usuários ativos<strong>${item.total_usuarios || 0}</strong></span>
         <span>Clientes<strong>${item.total_clientes || 0}</strong></span>
         <span>Assinatura<strong>${escapeHtml(item.status_assinatura || "Não configurada")}</strong></span>
         <span>Pendente<strong>${money(item.valor_pendente)}</strong></span>
@@ -557,10 +558,64 @@ async function loadStudios() {
       <p class="muted">${escapeHtml(item.endereco || "Endereço não informado")}</p>
       <div class="card-actions studio-admin-actions">
         <button class="secondary" data-studio-action="edit" data-id="${item.id}">Editar</button>
+        <button class="secondary studio-users" data-id="${item.id}">Usuários</button>
         ${String(item.id) !== String(sessionUser?.id_estudio) ? `<button class="secondary studio-billing" data-id="${item.id}">Mensalidades</button>` : ""}
         <button class="secondary export-studio" data-id="${item.id}" data-name="${escapeHtml(item.nome_estudio)}">Exportar dados</button>
       </div>
     </article>`).join("") || `<div class="panel empty">Nenhum estúdio cadastrado.</div>`}</div>`;
+}
+
+async function openStudioUsers(studioId) {
+  const data = await api(`/api/admin/estudios/${studioId}/usuarios`);
+  const rows = data.usuarios.map(item => `<article class="card studio-user-card">
+    <span class="tattooer-color" style="background:${escapeHtml(item.cor_agenda)}"></span>
+    <div><strong>${escapeHtml(item.nome)}</strong><small>${escapeHtml(item.login)} · ${escapeHtml(item.perfil_acesso)}${item.ultimo_login ? ` · último acesso ${dateBr(item.ultimo_login)}` : ""}</small></div>
+    <span class="badge ${item.ativo ? "" : "badge-late"}">${item.ativo ? "Ativo" : "Inativo"}</span>
+    <button class="secondary edit-studio-user" data-studio="${studioId}" data-id="${item.id}">Editar</button>
+  </article>`).join("") || `<div class="card muted">Nenhum usuário cadastrado.</div>`;
+  $("#actionContent").innerHTML = `<header><h2>Usuários · ${escapeHtml(data.estudio.nome_estudio)}</h2><button class="close" type="button">×</button></header>
+    <button class="primary new-studio-user" data-studio="${studioId}">+ Novo usuário</button>
+    <div class="studio-user-list">${rows}</div>`;
+  if (!$("#actionDialog").open) $("#actionDialog").showModal();
+}
+
+async function openStudioUserEditor(studioId, userId = "") {
+  const data = await api(`/api/admin/estudios/${studioId}/usuarios`);
+  const item = data.usuarios.find(user => String(user.id) === String(userId)) || {};
+  $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} usuário</h2><button class="close" type="button">×</button></header>
+    <form id="studioUserForm">
+      <label>Nome<input name="nome" value="${escapeHtml(item.nome)}" required></label>
+      <label>Usuário de acesso<input name="login" value="${escapeHtml(item.login)}" autocomplete="off" autocapitalize="none" required></label>
+      <label>${item.id ? "Nova senha (opcional)" : "Senha inicial"}<input name="senha" type="password" minlength="8" autocomplete="new-password" ${item.id ? "" : "required"}></label>
+      <label>Perfil<select name="perfil_acesso">
+        <option value="TATUADOR" ${item.perfil_acesso === "TATUADOR" ? "selected" : ""}>Tatuador</option>
+        <option value="ADMINISTRADOR" ${item.perfil_acesso === "ADMINISTRADOR" ? "selected" : ""}>Administrador</option>
+        <option value="RECEPCAO" ${item.perfil_acesso === "RECEPCAO" ? "selected" : ""}>Recepção</option>
+      </select></label>
+      <label>Cor na agenda<input name="cor_agenda" type="color" value="${escapeHtml(item.cor_agenda || "#d5a75b")}"></label>
+      ${item.id ? `<label class="check-label"><input name="ativo" type="checkbox" value="1" ${item.ativo ? "checked" : ""}> Usuário ativo</label>` : ""}
+      <button class="primary">${item.id ? "Salvar usuário" : "Criar usuário"}</button>
+      <button class="secondary back-studio-users" type="button" data-studio="${studioId}">Voltar</button>
+      <p class="form-feedback" role="alert"></p>
+    </form>`;
+  $("#studioUserForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const feedback = $(".form-feedback", form);
+    try {
+      const values = Object.fromEntries(new FormData(form));
+      if (!item.id) values.ativo = true;
+      await api(`/api/admin/estudios/${studioId}/usuarios${item.id ? `/${item.id}` : ""}`, {
+        method: item.id ? "PUT" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(values)
+      });
+      toast(item.id ? "Usuário atualizado." : "Usuário criado.");
+      await openStudioUsers(studioId);
+    } catch (error) {
+      feedback.textContent = error.message;
+    }
+  };
 }
 
 async function loadPrivacyDashboard() {
@@ -773,9 +828,13 @@ function openStockAction(action, itemId = "") {
   };
 }
 
-function openAppointment(date = "") {
+async function openAppointment(date = "") {
   const form = $("#appointmentForm"); form.reset();
   form.elements.data.value = date;
+  const tattooers = await api("/api/tatuadores");
+  form.elements.id_tatuador.innerHTML = `<option value="">Selecione...</option>${tattooers.map(item =>
+    `<option value="${item.id}" ${String(item.id) === String(sessionUser?.id) ? "selected" : ""}>${escapeHtml(item.nome)}</option>`
+  ).join("")}`;
   $("#appointmentDialog").showModal();
 }
 
@@ -1415,7 +1474,9 @@ function openInstallmentPayment(trigger) {
 }
 
 async function openOrder(appointmentId, initialTab = "os-data") {
-  const data = await api(`/api/os?id=${appointmentId}`);
+  const [data, tattooers] = await Promise.all([
+    api(`/api/os?id=${appointmentId}`), api("/api/tatuadores")
+  ]);
   activeOrderData = data;
   const [date, time] = data.data_hora.split(" ");
   const today = todaySp();
@@ -1498,7 +1559,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
       <div class="finance-actions service-actions"><button class="primary" type="button" data-service-action="description">Editar descrição</button>${hasModule("estoque") ? `<button class="secondary" type="button" data-service-action="ink">Mistura de tintas</button><button class="secondary" type="button" data-service-action="material">Adicionar material</button>` : ""}</div>
       ${hasModule("estoque") ? `<h2>Receitas de tintas</h2>${inkRecipeHtml}<h2>Outros materiais utilizados</h2>${materialHtml}` : ""}
     </div>
-    <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${appointmentStatuses.map(([value, label]) => `<option value="${value}" ${value === currentAppointmentStatus ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
+    <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><label>Profissional<select name="id_tatuador" required><option value="">Selecione...</option>${tattooers.map(item => `<option value="${item.id}" ${String(item.id) === String(data.id_tatuador) ? "selected" : ""}>${escapeHtml(item.nome)}</option>`).join("")}</select></label><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${appointmentStatuses.map(([value, label]) => `<option value="${value}" ${value === currentAppointmentStatus ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
     ${hasModule("financeiro") ? `<div class="tab-pane" id="os-finance"><div class="stats"><div class="card stat">Valor final<strong>${money(data.valor_final)}</strong></div><div class="card stat">Total pago<strong>${money(data.total_pago)}</strong></div><div class="card stat">Saldo aberto<strong>${money(data.saldo_aberto)}</strong></div></div>
       <div class="finance-actions"><button class="primary" type="button" data-finance-action="payment">Registrar pagamento</button>
       ${!data.parcelas.length && data.saldo_aberto > 0 ? `<button class="secondary" type="button" data-finance-action="credit">Criar crediário</button>` : ""}
@@ -1577,6 +1638,19 @@ document.addEventListener("click", event => {
   if (studioAction) openStudioEditor(studioAction.dataset.id);
   const studioBilling = event.target.closest(".studio-billing");
   if (studioBilling) openStudioBilling(studioBilling.dataset.id)
+    .catch(error => toast(error.message));
+  const studioUsers = event.target.closest(".studio-users");
+  if (studioUsers) openStudioUsers(studioUsers.dataset.id)
+    .catch(error => toast(error.message));
+  const newStudioUser = event.target.closest(".new-studio-user");
+  if (newStudioUser) openStudioUserEditor(newStudioUser.dataset.studio)
+    .catch(error => toast(error.message));
+  const editStudioUser = event.target.closest(".edit-studio-user");
+  if (editStudioUser) openStudioUserEditor(
+    editStudioUser.dataset.studio, editStudioUser.dataset.id
+  ).catch(error => toast(error.message));
+  const backStudioUsers = event.target.closest(".back-studio-users");
+  if (backStudioUsers) openStudioUsers(backStudioUsers.dataset.studio)
     .catch(error => toast(error.message));
   const studioExport = event.target.closest(".export-studio");
   if (studioExport) exportStudioData(studioExport.dataset.id, studioExport.dataset.name)
