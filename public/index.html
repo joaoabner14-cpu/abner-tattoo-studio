@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.19/main.min.css">
-  <link rel="stylesheet" href="/assets/app.css?v=20260706-2">
+  <link rel="stylesheet" href="/assets/app.css?v=20260706-modules1">
 </head>
 <body class="auth-loading">
   <script>
@@ -42,12 +42,12 @@
     <button class="account-button" id="accountButton" type="button" aria-label="Abrir perfil">👤</button>
   </header>
   <aside class="sidebar" id="sidebar">
-    <button class="nav-link active" data-page="agenda">Agenda</button>
-    <button class="nav-link" data-page="clientes">Clientes</button>
-    <button class="nav-link" data-page="financeiro">Financeiro</button>
-    <button class="nav-link" data-page="estoque">Estoque</button>
-    <button class="nav-link" data-page="marketing">Marketing</button>
-    <button class="nav-link" data-page="privacidade">Privacidade</button>
+    <button class="nav-link active" data-page="agenda" data-module="agenda">Agenda</button>
+    <button class="nav-link" data-page="clientes" data-module="clientes">Clientes</button>
+    <button class="nav-link" data-page="financeiro" data-module="financeiro">Financeiro</button>
+    <button class="nav-link" data-page="estoque" data-module="estoque">Estoque</button>
+    <button class="nav-link" data-page="marketing" data-module="marketing">Marketing</button>
+    <button class="nav-link" data-page="privacidade" data-module="clientes">Privacidade</button>
     <button class="nav-link" id="adminStudiosNav" data-page="estudios" hidden>Estúdios</button>
     <div class="sidebar-account">
       <button class="nav-link" id="logoutButton">Sair</button>
@@ -59,7 +59,7 @@
       <div id="calendar" class="panel calendar"></div>
       <div class="dashboard-grid">
         <div><h2>Próximos agendamentos</h2><div id="appointmentList"></div></div>
-        <div><h2>Financeiro</h2><div id="financePanel"></div></div>
+        <div id="homeFinanceSection"><h2>Financeiro</h2><div id="financePanel"></div></div>
       </div>
     </section>
     <section id="clientes" class="page">
@@ -106,6 +106,6 @@
   <dialog id="actionDialog"><div id="actionContent"></div></dialog>
   <div id="toast" role="status"></div>
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.19/index.global.min.js"></script>
-  <script type="module" src="/assets/app.js?v=20260706-security1"></script>
+  <script type="module" src="/assets/app.js?v=20260706-modules1"></script>
 </body>
 </html>

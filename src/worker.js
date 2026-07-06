@@ -113,7 +113,7 @@ const whatsappPhone = value => {
   return phone.startsWith("55") ? phone : `55${phone}`;
 };
 
-async function listAppointments(db, url, studioId, studioName) {
+async function listAppointments(db, url, studioId, studioName, enabledModules) {
   const { results } = await db.prepare(`
     SELECT a.id, a.data_hora, a.status, c.nome, c.telefone
     FROM agendamentos a JOIN clientes c ON c.id = a.id_cliente
@@ -141,6 +141,8 @@ async function listAppointments(db, url, studioId, studioName) {
       WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio) IS NOT NULL
         AND status NOT IN ('Encerrado')
     `).bind(studioId).all();
+    if (!enabledModules.has("financeiro")) installments.length = 0;
+    if (!enabledModules.has("marketing")) marketing.length = 0;
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
       .map(x => ({
         id: `agendamento-${x.id}`,
@@ -313,7 +315,7 @@ async function createAppointment(db, request, studioId) {
   return json({ ok: true, id: appointmentId }, 201);
 }
 
-async function openOrder(db, url, studioId) {
+async function openOrder(db, url, studioId, enabledModules) {
   const id = integer(url.searchParams.get("id"));
   const row = await db.prepare(`
     SELECT a.id id_agendamento, a.data_hora, a.status status_agendamento,a.faltou,
@@ -370,12 +372,27 @@ async function openOrder(db, url, studioId) {
     SELECT id, tipo, valor, descricao, data_registro
     FROM financeiro_ajustes WHERE id_financeiro=? ORDER BY data_registro DESC, id DESC
   `).bind(row.id_financeiro).all();
-  return json({ ...row, parcelas: installments, materiais: materials,
+  const response = { ...row, parcelas: installments, materiais: materials,
     batoques: cups.map(cup => ({
       ...cup, tintas: cupInks.filter(ink => ink.id_batoque === cup.id)
     })),
     movimentos: movements, ajustes: adjustments, total_pago: paid.total,
-    saldo_aberto: Math.max(0, row.valor_final - paid.total) });
+    saldo_aberto: Math.max(0, row.valor_final - paid.total) };
+  if (!enabledModules.has("financeiro")) {
+    for (const field of ["id_financeiro", "valor_orcado", "valor_sinal",
+      "valor_adicional", "valor_desconto", "valor_final", "forma_pagamento",
+      "sinal_pago", "data_pagamento_sinal"]) response[field] = null;
+    response.parcelas = [];
+    response.movimentos = [];
+    response.ajustes = [];
+    response.total_pago = null;
+    response.saldo_aberto = null;
+  }
+  if (!enabledModules.has("estoque")) {
+    response.materiais = [];
+    response.batoques = [];
+  }
+  return json(response);
 }
 
 async function orderService(db, request, url, studioId) {
@@ -1203,7 +1220,7 @@ async function clientSummary(db, url, studioId) {
   })));
 }
 
-async function clientCrm(db, id, studioId) {
+async function clientCrm(db, id, studioId, enabledModules) {
   const client = await db.prepare(`
     SELECT c.*,EXISTS(SELECT 1 FROM crm_fotos_clientes fc
       WHERE fc.id_cliente=c.id) tem_foto
@@ -1256,6 +1273,22 @@ async function clientCrm(db, id, studioId) {
     SELECT id,tipo,descricao,data_evento,id_os,id_agendamento
     FROM crm_eventos WHERE id_cliente=? AND id_estudio=? ORDER BY data_evento DESC
   `).bind(id, studioId).all();
+  if (!enabledModules.has("agenda")) {
+    appointments.length = 0;
+    for (const order of orders) {
+      order.data_hora = null;
+      order.status_agendamento = null;
+      order.faltou = 0;
+    }
+  }
+  if (!enabledModules.has("financeiro")) {
+    payments.length = 0;
+    installments.length = 0;
+    for (const order of orders) {
+      order.valor_final = null;
+      order.pago = 0;
+    }
+  }
   const spent = payments.reduce((sum, item) =>
     sum + (["Pagamento", "Sinal"].includes(item.tipo) ? Number(item.valor)
       : item.tipo === "Estorno" ? -Number(item.valor) : 0), 0);
@@ -1605,13 +1638,162 @@ async function passwordCredentials(password) {
   };
 }
 
+async function studioDataExport(db, studioId) {
+  const studio = await db.prepare("SELECT * FROM estudios WHERE id=?").bind(studioId).first();
+  if (!studio) return null;
+  const queries = {
+    usuarios: `SELECT id,login,nome,ativo,data_criacao,ultimo_login,foto_perfil,papel
+      FROM usuarios WHERE id_estudio=?`,
+    modulos: "SELECT * FROM estudio_modulos WHERE id_estudio=? ORDER BY modulo",
+    assinatura: "SELECT * FROM assinaturas_estudios WHERE id_estudio=?",
+    parcelas_acesso: `SELECT * FROM assinatura_parcelas
+      WHERE id_estudio=? ORDER BY competencia`,
+    clientes: "SELECT * FROM clientes WHERE id_estudio=? ORDER BY id",
+    agendamentos: "SELECT * FROM agendamentos WHERE id_estudio=? ORDER BY id",
+    ordens_servico: "SELECT * FROM ordem_servico WHERE id_estudio=? ORDER BY id",
+    financeiro: "SELECT * FROM financeiro WHERE id_estudio=? ORDER BY id",
+    financeiro_movimentos: `SELECT fm.* FROM financeiro_movimentos fm
+      JOIN financeiro f ON f.id=fm.id_financeiro WHERE f.id_estudio=? ORDER BY fm.id`,
+    financeiro_ajustes: `SELECT fa.* FROM financeiro_ajustes fa
+      JOIN financeiro f ON f.id=fa.id_financeiro WHERE f.id_estudio=? ORDER BY fa.id`,
+    crediario: `SELECT cr.* FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
+      WHERE f.id_estudio=? ORDER BY cr.id`,
+    caixa: "SELECT * FROM caixa WHERE id_estudio=? ORDER BY id",
+    gestao_financeira: "SELECT * FROM gestao_financeira WHERE id_estudio=? ORDER BY id",
+    estoque: "SELECT * FROM estoque WHERE id_estudio=? ORDER BY id",
+    estoque_movimentos: `SELECT em.* FROM estoque_movimentos em
+      JOIN estoque e ON e.id=em.id_estoque WHERE e.id_estudio=? ORDER BY em.id`,
+    materiais_os: `SELECT oc.* FROM os_consumo oc JOIN ordem_servico os ON os.id=oc.id_os
+      WHERE os.id_estudio=? ORDER BY oc.id`,
+    batoques: `SELECT ob.* FROM os_batoques ob JOIN ordem_servico os ON os.id=ob.id_os
+      WHERE os.id_estudio=? ORDER BY ob.id`,
+    tintas_batoques: `SELECT obt.* FROM os_batoque_tintas obt
+      JOIN os_batoques ob ON ob.id=obt.id_batoque
+      JOIN ordem_servico os ON os.id=ob.id_os WHERE os.id_estudio=? ORDER BY obt.id`,
+    planejamento_marketing: `SELECT * FROM planejamento_marketing
+      WHERE id_estudio=? ORDER BY id`,
+    artes_marketing: `SELECT ma.* FROM marketing_artes ma
+      JOIN planejamento_marketing pm ON pm.id=ma.id_planejamento
+      WHERE pm.id_estudio=? ORDER BY ma.id_planejamento`,
+    eventos_crm: "SELECT * FROM crm_eventos WHERE id_estudio=? ORDER BY id",
+    fotos_clientes: `SELECT fc.* FROM crm_fotos_clientes fc
+      JOIN clientes c ON c.id=fc.id_cliente WHERE c.id_estudio=?`,
+    fotos_tatuagens: `SELECT ft.* FROM crm_fotos_tatuagens ft
+      JOIN ordem_servico os ON os.id=ft.id_os WHERE os.id_estudio=?`,
+    lgpd_clientes: "SELECT * FROM lgpd_clientes WHERE id_estudio=?",
+    lgpd_solicitacoes: "SELECT * FROM lgpd_solicitacoes WHERE id_estudio=? ORDER BY id",
+    lgpd_historico: "SELECT * FROM lgpd_historico WHERE id_estudio=? ORDER BY id"
+  };
+  const exported = {};
+  for (const [key, sql] of Object.entries(queries)) {
+    const { results } = await db.prepare(sql).bind(studioId).all();
+    exported[key] = results;
+  }
+  return {
+    formato: "abner-tattoo-studio-export",
+    versao: 1,
+    exportado_em: new Date().toISOString(),
+    estudio: studio,
+    dados: exported
+  };
+}
+
 async function studioAdministration(db, request, url, user) {
   if (user.papel !== "SUPERADMIN") return error("Acesso restrito ao administrador geral.", 403);
+  const exportMatch = url.pathname.match(/^\/api\/admin\/estudios\/(\d+)\/exportar$/);
+  if (exportMatch && request.method === "GET") {
+    const exported = await studioDataExport(db, integer(exportMatch[1]));
+    return exported ? json(exported) : error("Estúdio não encontrado.", 404);
+  }
+  const subscriptionMatch = url.pathname.match(
+    /^\/api\/admin\/estudios\/(\d+)\/assinatura$/
+  );
+  if (subscriptionMatch && request.method === "GET") {
+    const studioId = integer(subscriptionMatch[1]);
+    const studio = await db.prepare(
+      "SELECT id,nome_estudio FROM estudios WHERE id=?"
+    ).bind(studioId).first();
+    if (!studio) return error("Estúdio não encontrado.", 404);
+    const subscription = await db.prepare(
+      "SELECT * FROM assinaturas_estudios WHERE id_estudio=?"
+    ).bind(studioId).first();
+    const { results: installments } = await db.prepare(`
+      SELECT * FROM assinatura_parcelas WHERE id_estudio=?
+      ORDER BY competencia DESC,id DESC
+    `).bind(studioId).all();
+    return json({ estudio: studio, assinatura: subscription, parcelas: installments });
+  }
+  const installmentCreateMatch = url.pathname.match(
+    /^\/api\/admin\/estudios\/(\d+)\/parcelas$/
+  );
+  if (installmentCreateMatch && request.method === "POST") {
+    const studioId = integer(installmentCreateMatch[1]);
+    const data = await body(request);
+    const subscription = await db.prepare(
+      "SELECT * FROM assinaturas_estudios WHERE id_estudio=?"
+    ).bind(studioId).first();
+    if (!subscription) return error("Assinatura não encontrada.", 404);
+    const competence = /^\d{4}-\d{2}$/.test(data.competencia || "")
+      ? data.competencia : saoPauloDate().slice(0, 7);
+    const dueDay = Math.min(28, Math.max(1,
+      integer(data.dia_vencimento) || Number(subscription.dia_vencimento) || 10));
+    const dueDate = data.data_vencimento || `${competence}-${String(dueDay).padStart(2, "0")}`;
+    const value = data.valor === "" || data.valor == null
+      ? Number(subscription.valor_mensal) : number(data.valor);
+    if (value < 0) return error("Informe um valor válido.");
+    try {
+      const created = await db.prepare(`
+        INSERT INTO assinatura_parcelas
+          (id_estudio,competencia,data_vencimento,valor,observacoes)
+        VALUES(?,?,?,?,?)
+      `).bind(studioId, competence, dueDate, value, data.observacoes || "").run();
+      return json({ ok: true, id: created.meta.last_row_id }, 201);
+    } catch (cause) {
+      if (String(cause.message || "").includes("UNIQUE"))
+        return error("Já existe uma parcela para esta competência.");
+      throw cause;
+    }
+  }
+  const installmentActionMatch = url.pathname.match(
+    /^\/api\/admin\/estudios\/(\d+)\/parcelas\/(\d+)\/(pagar|cancelar)$/
+  );
+  if (installmentActionMatch && request.method === "POST") {
+    const studioId = integer(installmentActionMatch[1]);
+    const installmentId = integer(installmentActionMatch[2]);
+    const action = installmentActionMatch[3];
+    const data = await body(request);
+    const installment = await db.prepare(`
+      SELECT * FROM assinatura_parcelas WHERE id=? AND id_estudio=?
+    `).bind(installmentId, studioId).first();
+    if (!installment) return error("Parcela não encontrada.", 404);
+    if (action === "pagar") {
+      await db.prepare(`
+        UPDATE assinatura_parcelas SET status='Pago',data_pagamento=?,
+          forma_pagamento=?,observacoes=? WHERE id=? AND id_estudio=?
+      `).bind(data.data_pagamento || saoPauloDate(), data.forma_pagamento || "Pix",
+        data.observacoes || installment.observacoes || "", installmentId, studioId).run();
+    } else {
+      await db.prepare(`
+        UPDATE assinatura_parcelas SET status='Cancelado',data_pagamento=NULL
+        WHERE id=? AND id_estudio=?
+      `).bind(installmentId, studioId).run();
+    }
+    return json({ ok: true });
+  }
   if (request.method === "GET" && url.pathname === "/api/admin/estudios") {
     const { results } = await db.prepare(`
       SELECT e.*,u.id id_usuario,u.nome nome_usuario,u.login,u.ativo usuario_ativo,
-        (SELECT COUNT(*) FROM clientes c WHERE c.id_estudio=e.id) total_clientes
+        (SELECT COUNT(*) FROM clientes c WHERE c.id_estudio=e.id) total_clientes,
+        COALESCE((SELECT GROUP_CONCAT(em.modulo) FROM estudio_modulos em
+          WHERE em.id_estudio=e.id AND em.habilitado=1),'') modulos_habilitados,
+        ae.valor_mensal,ae.dia_vencimento,ae.status status_assinatura,
+        ae.data_inicio,ae.data_cancelamento,ae.observacoes observacoes_assinatura,
+        (SELECT COUNT(*) FROM assinatura_parcelas ap
+          WHERE ap.id_estudio=e.id AND ap.status='Pendente') parcelas_pendentes,
+        COALESCE((SELECT SUM(ap.valor) FROM assinatura_parcelas ap
+          WHERE ap.id_estudio=e.id AND ap.status='Pendente'),0) valor_pendente
       FROM estudios e
+      LEFT JOIN assinaturas_estudios ae ON ae.id_estudio=e.id
       LEFT JOIN usuarios u ON u.id=(
         SELECT ux.id FROM usuarios ux WHERE ux.id_estudio=e.id
         ORDER BY CASE WHEN ux.papel='SUPERADMIN' THEN 0 ELSE 1 END,ux.id LIMIT 1
@@ -1622,6 +1804,10 @@ async function studioAdministration(db, request, url, user) {
   }
   if (request.method === "POST" && url.pathname === "/api/admin/estudios") {
     const data = await body(request);
+    const moduleNames = ["agenda", "clientes", "financeiro", "estoque", "marketing"];
+    const selectedModules = new Set(Array.isArray(data.modulos)
+      ? data.modulos.filter(module => moduleNames.includes(module))
+      : ["agenda", "clientes", "financeiro", "estoque"]);
     const login = required(data.login, "usuário").toLowerCase();
     const duplicate = await db.prepare("SELECT id FROM usuarios WHERE login=? COLLATE NOCASE")
       .bind(login).first();
@@ -1645,10 +1831,29 @@ async function studioAdministration(db, request, url, user) {
       `).bind(studio.meta.last_row_id, login,
         required(data.nome_usuario, "nome do responsável"),
         credentials.salt, credentials.hash, credentials.iterations).run();
+      await db.batch([
+        ...moduleNames.map(module => db.prepare(`
+          INSERT INTO estudio_modulos(id_estudio,modulo,habilitado) VALUES(?,?,?)
+        `).bind(studio.meta.last_row_id, module,
+          selectedModules.has(module) ? 1 : 0)),
+        db.prepare(`
+          INSERT INTO assinaturas_estudios
+            (id_estudio,valor_mensal,dia_vencimento,status,data_inicio,observacoes)
+          VALUES(?,?,?,'Ativa',?,?)
+        `).bind(studio.meta.last_row_id, number(data.valor_mensal),
+          Math.min(28, Math.max(1, integer(data.dia_vencimento) || 10)),
+          data.data_inicio || saoPauloDate(), data.observacoes_assinatura || "")
+      ]);
       return json({
         ok: true, id: studio.meta.last_row_id, id_usuario: account.meta.last_row_id
       }, 201);
     } catch (cause) {
+      await db.prepare("DELETE FROM usuarios WHERE id_estudio=?")
+        .bind(studio.meta.last_row_id).run();
+      await db.prepare("DELETE FROM estudio_modulos WHERE id_estudio=?")
+        .bind(studio.meta.last_row_id).run();
+      await db.prepare("DELETE FROM assinaturas_estudios WHERE id_estudio=?")
+        .bind(studio.meta.last_row_id).run();
       await db.prepare("DELETE FROM estudios WHERE id=?").bind(studio.meta.last_row_id).run();
       throw cause;
     }
@@ -1657,10 +1862,17 @@ async function studioAdministration(db, request, url, user) {
   if (match && request.method === "PUT") {
     const studioId = integer(match[1]);
     const data = await body(request);
+    const moduleNames = ["agenda", "clientes", "financeiro", "estoque", "marketing"];
+    const selectedModules = new Set(Array.isArray(data.modulos)
+      ? data.modulos.filter(module => moduleNames.includes(module))
+      : ["agenda", "clientes", "financeiro", "estoque"]);
+    const subscriptionStatus = ["Ativa", "Pausada", "Cancelada"]
+      .includes(data.status_assinatura) ? data.status_assinatura : "Ativa";
     const active = data.ativo === true || data.ativo === 1 || data.ativo === "1";
+    const accessActive = active && subscriptionStatus === "Ativa";
     const studio = await db.prepare("SELECT id FROM estudios WHERE id=?").bind(studioId).first();
     if (!studio) return error("Estúdio não encontrado.", 404);
-    if (studioId === Number(user.id_estudio) && !active)
+    if (studioId === Number(user.id_estudio) && !accessActive)
       return error("O estúdio do administrador geral não pode ser desativado.");
     const account = await db.prepare(
       "SELECT id FROM usuarios WHERE id_estudio=? ORDER BY id LIMIT 1"
@@ -1680,11 +1892,37 @@ async function studioAdministration(db, request, url, user) {
         required(data.nome_usuario, "nome do responsável"),
         String(data.cnpj || "").replace(/\D/g, ""), data.endereco || "",
         data.instagram || "", emailAddress(data.email_privacidade),
-        Math.max(0, integer(data.prazo_retencao_anos)), active ? 1 : 0, studioId),
+        Math.max(0, integer(data.prazo_retencao_anos)), accessActive ? 1 : 0, studioId),
       db.prepare("UPDATE usuarios SET login=?,nome=?,ativo=? WHERE id=?")
         .bind(login, required(data.nome_usuario, "nome do responsável"),
-          active ? 1 : 0, account.id)
+          accessActive ? 1 : 0, account.id)
     ];
+    statements.push(
+      ...moduleNames.map(module => db.prepare(`
+        INSERT INTO estudio_modulos(id_estudio,modulo,habilitado,data_atualizacao)
+        VALUES(?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(id_estudio,modulo) DO UPDATE SET
+          habilitado=excluded.habilitado,data_atualizacao=CURRENT_TIMESTAMP
+      `).bind(studioId, module, selectedModules.has(module) ? 1 : 0)),
+      db.prepare(`
+        INSERT INTO assinaturas_estudios
+          (id_estudio,valor_mensal,dia_vencimento,status,data_inicio,
+            data_cancelamento,observacoes,data_atualizacao)
+        VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(id_estudio) DO UPDATE SET
+          valor_mensal=excluded.valor_mensal,
+          dia_vencimento=excluded.dia_vencimento,
+          status=excluded.status,
+          data_inicio=excluded.data_inicio,
+          data_cancelamento=excluded.data_cancelamento,
+          observacoes=excluded.observacoes,
+          data_atualizacao=CURRENT_TIMESTAMP
+      `).bind(studioId, number(data.valor_mensal),
+        Math.min(28, Math.max(1, integer(data.dia_vencimento) || 10)),
+        subscriptionStatus, data.data_inicio || null,
+        subscriptionStatus === "Cancelada" ? (data.data_cancelamento || saoPauloDate()) : null,
+        data.observacoes_assinatura || "")
+    );
     if (data.senha) {
       const credentials = await passwordCredentials(data.senha);
       statements.push(db.prepare(`
@@ -1692,7 +1930,7 @@ async function studioAdministration(db, request, url, user) {
       `).bind(credentials.salt, credentials.hash, credentials.iterations, account.id));
     }
     await db.batch(statements);
-    if (!active) {
+    if (!accessActive) {
       await db.prepare("UPDATE sessoes SET revogada=1 WHERE id_usuario=?")
         .bind(account.id).run();
     }
@@ -1706,7 +1944,9 @@ async function currentUser(db, request) {
   if (!token) return null;
   const row = await db.prepare(`
     SELECT u.id,u.login,u.nome,u.foto_perfil,u.id_estudio,u.papel,
-      e.nome_estudio,e.ativo estudio_ativo,s.id id_sessao
+      e.nome_estudio,e.ativo estudio_ativo,s.id id_sessao,
+      COALESCE((SELECT GROUP_CONCAT(em.modulo) FROM estudio_modulos em
+        WHERE em.id_estudio=u.id_estudio AND em.habilitado=1),'') modulos
     FROM sessoes s
     JOIN usuarios u ON u.id=s.id_usuario
     JOIN estudios e ON e.id=u.id_estudio
@@ -1745,7 +1985,8 @@ async function authApi(db, request, url) {
     if (!user) return authResponse({ authenticated: false }, 401);
     return authResponse({ authenticated: true, user: {
       id: user.id, login: user.login, nome: user.nome, papel: user.papel,
-      id_estudio: user.id_estudio, nome_estudio: user.nome_estudio
+      id_estudio: user.id_estudio, nome_estudio: user.nome_estudio,
+      modulos: String(user.modulos || "").split(",").filter(Boolean)
     } });
   }
   if (path === "/api/auth/login" && request.method === "POST") {
@@ -1882,6 +2123,23 @@ async function authApi(db, request, url) {
   return authResponse({ error: "Rota de autenticação não encontrada." }, 404);
 }
 
+function requiredModules(pathname) {
+  if (pathname === "/api/lgpd") return ["clientes"];
+  if (pathname === "/api/notificacoes" || pathname.startsWith("/api/marketing"))
+    return ["marketing"];
+  if (pathname.startsWith("/api/estoque")) return ["estoque"];
+  if (/^\/api\/os\/\d+\/(materiais|tintas)/.test(pathname))
+    return ["agenda", "estoque"];
+  if (pathname === "/api/dashboard" || pathname.startsWith("/api/financeiro") ||
+    pathname === "/api/movimentos" || pathname === "/api/ajustes" ||
+    pathname.startsWith("/api/crediario")) return ["financeiro"];
+  if (pathname.startsWith("/api/clientes") || pathname.startsWith("/api/crm"))
+    return ["clientes"];
+  if (pathname.startsWith("/api/agendamentos") || pathname === "/api/os" ||
+    /^\/api\/os\//.test(pathname)) return ["agenda"];
+  return [];
+}
+
 async function api(request, env, url, user) {
   const db = env.DB;
   const studioId = Number(user.id_estudio);
@@ -1890,6 +2148,10 @@ async function api(request, env, url, user) {
     if (administration) return administration;
     return error("Rota administrativa não encontrada.", 404);
   }
+  const enabledModules = new Set(String(user.modulos || "").split(",").filter(Boolean));
+  const missingModule = requiredModules(url.pathname)
+    .find(module => !enabledModules.has(module));
+  if (missingModule) return error("Este módulo não está habilitado para o estúdio.", 403);
   if (url.pathname === "/api/lgpd" && request.method === "GET") {
     const { results: requests } = await db.prepare(`
       SELECT ls.*,c.nome cliente
@@ -1924,7 +2186,7 @@ async function api(request, env, url, user) {
   }
   const crmMatch = url.pathname.match(/^\/api\/clientes\/(\d+)\/crm$/);
   if (crmMatch && request.method === "GET")
-    return clientCrm(db, integer(crmMatch[1]), studioId);
+    return clientCrm(db, integer(crmMatch[1]), studioId, enabledModules);
   const crmPhotoMatch = url.pathname.match(/^\/api\/crm\/(cliente|tatuagem)\/(\d+)\/foto$/);
   if (crmPhotoMatch) {
     const table = crmPhotoMatch[1] === "cliente" ? "crm_fotos_clientes" : "crm_fotos_tatuagens";
@@ -2212,7 +2474,7 @@ async function api(request, env, url, user) {
     if (managementResponse) return managementResponse;
   }
   if (request.method === "GET" && url.pathname === "/api/agendamentos")
-    return listAppointments(db, url, studioId, user.nome_estudio);
+    return listAppointments(db, url, studioId, user.nome_estudio, enabledModules);
   if (request.method === "POST" && url.pathname === "/api/agendamentos")
     return createAppointment(db, request, studioId);
   if (request.method === "PUT" && /^\/api\/agendamentos\/\d+$/.test(url.pathname)) {
@@ -2313,7 +2575,7 @@ async function api(request, env, url, user) {
     return json({ ok: true, estorno_sinal: signalRefund });
   }
   if (request.method === "GET" && url.pathname === "/api/os")
-    return openOrder(db, url, studioId);
+    return openOrder(db, url, studioId, enabledModules);
   if (/^\/api\/os\/\d+(?:\/(?:materiais|tintas)(?:\/\d+)?)?$/.test(url.pathname)) {
     const response = await orderService(db, request, url, studioId);
     if (response) return response;

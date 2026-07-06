@@ -89,6 +89,7 @@ let sessionUser = null;
 let studiosData = [];
 let pullRefreshSetup = false;
 let sessionAbortController = new AbortController();
+const hasModule = module => Boolean(sessionUser?.modulos?.includes(module));
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -118,7 +119,7 @@ async function loadAgenda() {
       ${item.eh_amanha && !item.cancelado ? `<a class="primary appointment-confirm" target="_blank" rel="noopener" href="${item.link_whatsapp}">Confirmar presença</a>` : ""}
     </div>`).join("")}</div></article>
   `).join("") || `<div class="panel empty">Nenhum agendamento futuro.</div>`;
-  await loadFinance();
+  if (hasModule("financeiro")) await loadFinance();
 }
 
 async function showAgenda() {
@@ -543,11 +544,16 @@ async function loadStudios() {
       <div class="studio-admin-details">
         <span>Usuário<strong>${escapeHtml(item.login || "—")}</strong></span>
         <span>Clientes<strong>${item.total_clientes || 0}</strong></span>
-        <span>CNPJ<strong>${escapeHtml(item.cnpj || "Não informado")}</strong></span>
-        <span>Instagram<strong>${escapeHtml(item.instagram || "Não informado")}</strong></span>
+        <span>Assinatura<strong>${escapeHtml(item.status_assinatura || "Não configurada")}</strong></span>
+        <span>Pendente<strong>${money(item.valor_pendente)}</strong></span>
       </div>
+      <div class="studio-module-badges">${String(item.modulos_habilitados || "").split(",").filter(Boolean).map(module => `<span class="badge">${escapeHtml(module)}</span>`).join("")}</div>
       <p class="muted">${escapeHtml(item.endereco || "Endereço não informado")}</p>
-      <button class="secondary" data-studio-action="edit" data-id="${item.id}">Editar estúdio</button>
+      <div class="card-actions studio-admin-actions">
+        <button class="secondary" data-studio-action="edit" data-id="${item.id}">Editar</button>
+        ${String(item.id) !== String(sessionUser?.id_estudio) ? `<button class="secondary studio-billing" data-id="${item.id}">Mensalidades</button>` : ""}
+        <button class="secondary export-studio" data-id="${item.id}" data-name="${escapeHtml(item.nome_estudio)}">Exportar dados</button>
+      </div>
     </article>`).join("") || `<div class="panel empty">Nenhum estúdio cadastrado.</div>`}</div>`;
 }
 
@@ -569,6 +575,10 @@ async function loadPrivacyDashboard() {
 
 function openStudioEditor(studioId = "") {
   const item = studiosData.find(entry => String(entry.id) === String(studioId)) || {};
+  const enabledModules = new Set(item.id
+    ? String(item.modulos_habilitados || "").split(",").filter(Boolean)
+    : ["agenda", "clientes", "financeiro", "estoque"]);
+  const isMainStudio = String(item.id) === String(sessionUser?.id_estudio);
   $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} estúdio</h2><button class="close" type="button">×</button></header>
     <form id="studioAdminForm">
       <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(item.nome_estudio)}" required></label>
@@ -580,7 +590,12 @@ function openStudioEditor(studioId = "") {
       <label>Instagram<input name="instagram" value="${escapeHtml(item.instagram)}"></label>
       <label>E-mail de privacidade<input name="email_privacidade" type="email" value="${escapeHtml(item.email_privacidade)}" required></label>
       <label>Retenção de dados em anos<input name="prazo_retencao_anos" type="number" min="0" step="1" value="${item.prazo_retencao_anos || ""}" placeholder="Não configurado"><small class="muted">Deixe vazio enquanto o estúdio não definir uma política.</small></label>
-      ${item.id ? `<label class="check-label"><input name="ativo" type="checkbox" value="1" ${item.ativo ? "checked" : ""}> Estúdio ativo</label>` : ""}
+      <fieldset class="platform-field"><legend>Módulos disponíveis</legend><div class="studio-module-options">${[["agenda","Agenda"],["clientes","Clientes"],["financeiro","Financeiro"],["estoque","Estoque"],["marketing","Marketing"]].map(([value,label]) => `<label class="check-label"><input type="checkbox" data-studio-module value="${value}" ${enabledModules.has(value) ? "checked" : ""}> ${label}</label>`).join("")}</div></fieldset>
+      ${!isMainStudio ? `<fieldset class="platform-field"><legend>Contrato de acesso</legend>
+        <div class="fields"><label>Valor mensal<input name="valor_mensal" data-money inputmode="numeric" value="${item.valor_mensal ? moneyInput(item.valor_mensal) : ""}"></label><label>Dia do vencimento<input name="dia_vencimento" type="number" min="1" max="28" value="${item.dia_vencimento || 10}"></label></div>
+        <div class="fields"><label>Início do contrato<input name="data_inicio" type="date" value="${item.data_inicio || todaySp()}"></label><label>Status<select name="status_assinatura">${["Ativa","Pausada","Cancelada"].map(status => `<option ${status === (item.status_assinatura || "Ativa") ? "selected" : ""}>${status}</option>`).join("")}</select></label></div>
+        <label>Observações do contrato<textarea name="observacoes_assinatura">${escapeHtml(item.observacoes_assinatura)}</textarea></label>
+      </fieldset>` : `<input name="status_assinatura" type="hidden" value="Ativa"><input name="ativo" type="hidden" value="1">`}
       <button class="primary">${item.id ? "Salvar alterações" : "Criar estúdio e usuário"}</button>
       <p class="form-feedback" role="alert" aria-live="polite"></p>
     </form>`;
@@ -597,7 +612,11 @@ function openStudioEditor(studioId = "") {
     button.textContent = item.id ? "Salvando..." : "Criando...";
     try {
       const values = Object.fromEntries(new FormData(form));
-      if (item.id) values.ativo = form.elements.ativo.checked;
+      values.modulos = $$("[data-studio-module]:checked", form).map(input => input.value);
+      if (!isMainStudio) values.ativo = values.status_assinatura === "Ativa";
+      if (item.id && values.status_assinatura === "Cancelada" &&
+        item.status_assinatura !== "Cancelada" &&
+        !confirm("Cancelar o contrato e bloquear o acesso deste estúdio? Exporte os dados antes de confirmar, se necessário.")) return;
       await api(item.id ? `/api/admin/estudios/${item.id}` : "/api/admin/estudios", {
         method: item.id ? "PUT" : "POST",
         headers: { "content-type": "application/json" },
@@ -614,6 +633,67 @@ function openStudioEditor(studioId = "") {
       button.textContent = originalText;
     }
   };
+}
+
+async function openStudioBilling(studioId) {
+  const data = await api(`/api/admin/estudios/${studioId}/assinatura`);
+  const subscription = data.assinatura || {};
+  const installments = data.parcelas.map(item => `<article class="card subscription-installment ${item.status === "Pendente" && item.data_vencimento < todaySp() ? "is-overdue" : ""}">
+    <div><strong>${item.competencia.split("-").reverse().join("/")} · ${money(item.valor)}</strong><small>Vencimento ${dateBr(item.data_vencimento)} · ${escapeHtml(item.status)}${item.data_pagamento ? ` · pago em ${dateBr(item.data_pagamento)}` : ""}</small></div>
+    <div class="card-actions">${item.status === "Pendente" ? `<button class="primary pay-subscription-installment" data-studio="${studioId}" data-id="${item.id}" data-value="${item.valor}">Receber</button><button class="danger cancel-subscription-installment" data-studio="${studioId}" data-id="${item.id}">Cancelar</button>` : ""}</div>
+  </article>`).join("") || `<div class="card muted">Nenhuma parcela de acesso gerada.</div>`;
+  $("#actionContent").innerHTML = `<header><h2>Mensalidades · ${escapeHtml(data.estudio.nome_estudio)}</h2><button class="close" type="button">×</button></header>
+    <div class="stats subscription-stats"><div class="card stat"><span>Mensalidade</span><strong>${money(subscription.valor_mensal)}</strong></div><div class="card stat"><span>Vencimento</span><strong>Dia ${subscription.dia_vencimento || "—"}</strong></div><div class="card stat"><span>Status</span><strong>${escapeHtml(subscription.status || "—")}</strong></div></div>
+    <form id="subscriptionInstallmentForm">
+      <h2>Gerar parcela</h2>
+      <div class="fields"><label>Competência<input name="competencia" type="month" value="${todaySp().slice(0,7)}" required></label><label>Vencimento<input name="data_vencimento" type="date"></label></div>
+      <label>Valor<input name="valor" data-money inputmode="numeric" value="${subscription.valor_mensal ? moneyInput(subscription.valor_mensal) : ""}"></label>
+      <label>Observações<input name="observacoes"></label>
+      <button class="primary">Gerar parcela</button>
+    </form>
+    <h2>Parcelas de acesso</h2><div class="subscription-list">${installments}</div>`;
+  applyInputMasks($("#actionContent"));
+  if (!$("#actionDialog").open) $("#actionDialog").showModal();
+  $("#subscriptionInstallmentForm").onsubmit = async event => {
+    event.preventDefault();
+    await send(`/api/admin/estudios/${studioId}/parcelas`, "POST", event.currentTarget);
+    toast("Parcela de acesso gerada.");
+    await openStudioBilling(studioId);
+    await loadStudios();
+  };
+}
+
+function openSubscriptionPayment(trigger) {
+  const studioId = trigger.dataset.studio;
+  $("#actionContent").innerHTML = `<header><h2>Receber mensalidade</h2><button class="close" type="button">×</button></header>
+    <form id="subscriptionPaymentForm">
+      <label>Valor<input value="${moneyInput(trigger.dataset.value)}" readonly></label>
+      <label>Data do pagamento<input name="data_pagamento" type="date" value="${todaySp()}" required></label>
+      <label>Forma de pagamento<select name="forma_pagamento"><option>Pix</option><option>Dinheiro</option><option>Transferência</option><option>Cartão</option></select></label>
+      <label>Observações<input name="observacoes"></label>
+      <button class="primary">Confirmar recebimento</button>
+    </form>`;
+  $("#subscriptionPaymentForm").onsubmit = async event => {
+    event.preventDefault();
+    await send(`/api/admin/estudios/${studioId}/parcelas/${trigger.dataset.id}/pagar`,
+      "POST", event.currentTarget);
+    toast("Mensalidade recebida.");
+    await openStudioBilling(studioId);
+    await loadStudios();
+  };
+}
+
+async function exportStudioData(studioId, name) {
+  const data = await api(`/api/admin/estudios/${studioId}/exportar`);
+  const url = URL.createObjectURL(new Blob(
+    [JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }
+  ));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `exportacao-${safeFileName(name)}-${todaySp()}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  toast("Dados do estúdio exportados.");
 }
 
 function openStockAction(action, itemId = "") {
@@ -781,9 +861,9 @@ async function loadClient(id) {
     return `<article class="card crm-tattoo-card">
       ${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy">` : `<div class="crm-photo-placeholder">Sem foto</div>`}
       <div class="crm-tattoo-content"><div class="card-head"><div><strong>OS #${order.id_os}</strong><small>${dateBr(order.data_hora || order.data_criacao)} · ${escapeHtml(status)}</small></div>
-      ${order.id_agendamento ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
+      ${order.id_agendamento && hasModule("agenda") ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
       <p>${escapeHtml(order.descricao || "Sem descrição.")}</p>
-      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span><span>Valor<strong>${money(order.valor_final)}</strong></span><span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
+      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span>${hasModule("financeiro") ? `<span>Valor<strong>${money(order.valor_final)}</strong></span>` : ""}<span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
       <button class="secondary edit-crm-order" data-id="${order.id_os}">Editar informações</button></div>
     </article>`;
   }).join("") || `<div class="card muted">Nenhuma tatuagem registrada.</div>`;
@@ -821,9 +901,9 @@ async function loadClient(id) {
     <label class="crm-client-photo">${client.tem_foto ? `<img src="/api/crm/cliente/${id}/foto?v=${Date.now()}" alt="Foto de ${escapeHtml(client.nome)}">` : `<span>👤</span>`}<input id="crmClientPhoto" type="file" accept="image/*" hidden></label>
     <div><h2>${escapeHtml(client.nome)}</h2><p>${escapeHtml(client.telefone)}${client.instagram ? ` · ${escapeHtml(client.instagram)}` : ""}</p><span class="badge">${escapeHtml(client.status)}</span></div>
   </div>
-  <div class="tabs crm-tabs"><button class="tab active" data-tab="crm-summary">Resumo</button><button class="tab" data-tab="crm-tattoos">Tatuagens</button><button class="tab" data-tab="crm-finance">Financeiro</button><button class="tab" data-tab="crm-appointments">Agendamentos</button><button class="tab" data-tab="crm-notes">Observações</button><button class="tab" data-tab="crm-timeline">Timeline</button><button class="tab" data-tab="crm-privacy">Privacidade</button></div>
+  <div class="tabs crm-tabs"><button class="tab active" data-tab="crm-summary">Resumo</button><button class="tab" data-tab="crm-tattoos">Tatuagens</button>${hasModule("financeiro") ? `<button class="tab" data-tab="crm-finance">Financeiro</button>` : ""}${hasModule("agenda") ? `<button class="tab" data-tab="crm-appointments">Agendamentos</button>` : ""}<button class="tab" data-tab="crm-notes">Observações</button><button class="tab" data-tab="crm-timeline">Timeline</button><button class="tab" data-tab="crm-privacy">Privacidade</button></div>
   <div class="tab-pane active" id="crm-summary">
-    <div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Tatuagens</span><strong>${metrics.tatuagens}</strong></div><div class="card stat"><span>Última visita</span><strong>${dateBr(metrics.ultima_visita) || "—"}</strong></div><div class="card stat"><span>Próximo agendamento</span><strong>${dateBr(metrics.proximo_agendamento) || "—"}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div></div>
+    <div class="stats crm-stats">${hasModule("financeiro") ? `<div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div>` : ""}<div class="card stat"><span>Tatuagens</span><strong>${metrics.tatuagens}</strong></div>${hasModule("agenda") ? `<div class="card stat"><span>Última visita</span><strong>${dateBr(metrics.ultima_visita) || "—"}</strong></div><div class="card stat"><span>Próximo agendamento</span><strong>${dateBr(metrics.proximo_agendamento) || "—"}</strong></div>` : ""}${hasModule("financeiro") ? `<div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div>` : ""}</div>
     <form id="crmClientForm">
       <div class="fields"><label>Nome<input name="nome" value="${escapeHtml(client.nome)}" required></label><label>Telefone<input name="telefone" value="${escapeHtml(client.telefone)}"></label></div>
       <div class="fields"><label>Instagram<input name="instagram" value="${escapeHtml(client.instagram)}"></label><label>Cidade<input name="cidade" value="${escapeHtml(client.cidade)}"></label></div>
@@ -834,8 +914,8 @@ async function loadClient(id) {
     </form>
   </div>
   <div class="tab-pane" id="crm-tattoos">${tattooHistory}</div>
-  <div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>
-  <div class="tab-pane" id="crm-appointments">${appointments}</div>
+  ${hasModule("financeiro") ? `<div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>` : ""}
+  ${hasModule("agenda") ? `<div class="tab-pane" id="crm-appointments">${appointments}</div>` : ""}
   <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
   <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>
   <div class="tab-pane" id="crm-privacy">
@@ -1356,7 +1436,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
     ${cup.observacao ? `<p class="muted">${escapeHtml(cup.observacao)}</p>` : ""}
   </article>`).join("") || `<div class="card muted">Nenhuma mistura de tinta registrada.</div>`;
   $("#orderContent").innerHTML = `<header><h2>Ordem de serviço #${data.id_os}</h2><button class="close" type="button">×</button></header>
-    <div class="tabs"><button class="tab active" data-tab="os-data">Cliente</button><button class="tab" data-tab="os-service">Serviço</button><button class="tab" data-tab="os-schedule">Agendamento</button><button class="tab" data-tab="os-finance">Financeiro</button></div>
+    <div class="tabs"><button class="tab active" data-tab="os-data">Cliente</button><button class="tab" data-tab="os-service">Serviço</button><button class="tab" data-tab="os-schedule">Agendamento</button>${hasModule("financeiro") ? `<button class="tab" data-tab="os-finance">Financeiro</button>` : ""}</div>
     <div class="tab-pane active" id="os-data">
       <div class="crm-header order-client-header">
         <div class="crm-client-photo">${data.tem_foto_cliente ? `<img src="/api/crm/cliente/${data.id_cliente}/foto" alt="Foto de ${escapeHtml(data.nome)}">` : `<span>👤</span>`}</div>
@@ -1375,17 +1455,16 @@ async function openOrder(appointmentId, initialTab = "os-data") {
       <div class="card order-client-notes"><span class="muted">Observações</span><p>${escapeHtml(data.observacoes || "Nenhuma observação cadastrada.")}</p></div>
     </div>
     <div class="tab-pane" id="os-service"><div class="card service-summary"><span class="muted">Descrição atual</span><p>${escapeHtml(data.descricao || "Nenhuma descrição registrada.")}</p></div>
-      <div class="finance-actions service-actions"><button class="primary" type="button" data-service-action="description">Editar descrição</button><button class="secondary" type="button" data-service-action="ink">Mistura de tintas</button><button class="secondary" type="button" data-service-action="material">Adicionar material</button></div>
-      <h2>Receitas de tintas</h2>${inkRecipeHtml}
-      <h2>Outros materiais utilizados</h2>${materialHtml}
+      <div class="finance-actions service-actions"><button class="primary" type="button" data-service-action="description">Editar descrição</button>${hasModule("estoque") ? `<button class="secondary" type="button" data-service-action="ink">Mistura de tintas</button><button class="secondary" type="button" data-service-action="material">Adicionar material</button>` : ""}</div>
+      ${hasModule("estoque") ? `<h2>Receitas de tintas</h2>${inkRecipeHtml}<h2>Outros materiais utilizados</h2>${materialHtml}` : ""}
     </div>
     <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${appointmentStatuses.map(([value, label]) => `<option value="${value}" ${value === currentAppointmentStatus ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
-    <div class="tab-pane" id="os-finance"><div class="stats"><div class="card stat">Valor final<strong>${money(data.valor_final)}</strong></div><div class="card stat">Total pago<strong>${money(data.total_pago)}</strong></div><div class="card stat">Saldo aberto<strong>${money(data.saldo_aberto)}</strong></div></div>
+    ${hasModule("financeiro") ? `<div class="tab-pane" id="os-finance"><div class="stats"><div class="card stat">Valor final<strong>${money(data.valor_final)}</strong></div><div class="card stat">Total pago<strong>${money(data.total_pago)}</strong></div><div class="card stat">Saldo aberto<strong>${money(data.saldo_aberto)}</strong></div></div>
       <div class="finance-actions"><button class="primary" type="button" data-finance-action="payment">Registrar pagamento</button>
       ${!data.parcelas.length && data.saldo_aberto > 0 ? `<button class="secondary" type="button" data-finance-action="credit">Criar crediário</button>` : ""}
       <button class="secondary" type="button" data-finance-action="adjustment">Acréscimo ou desconto</button></div>
       ${installmentHtml ? `<h2>Parcelas</h2>${installmentHtml}` : ""}
-      <h2>Histórico financeiro</h2><div class="finance-history">${financeHistory}</div></div>`;
+      <h2>Histórico financeiro</h2><div class="finance-history">${financeHistory}</div></div>` : ""}`;
   $("#orderDialog").showModal();
   $(`[data-tab=${initialTab}]`, $("#orderDialog"))?.click();
   $("#scheduleForm").onsubmit = async e => {
@@ -1452,6 +1531,23 @@ document.addEventListener("click", event => {
   if (marketingAction) openMarketingPlan(marketingAction.dataset.id);
   const studioAction = event.target.closest("[data-studio-action]");
   if (studioAction) openStudioEditor(studioAction.dataset.id);
+  const studioBilling = event.target.closest(".studio-billing");
+  if (studioBilling) openStudioBilling(studioBilling.dataset.id)
+    .catch(error => toast(error.message));
+  const studioExport = event.target.closest(".export-studio");
+  if (studioExport) exportStudioData(studioExport.dataset.id, studioExport.dataset.name)
+    .catch(error => toast(error.message));
+  const subscriptionPayment = event.target.closest(".pay-subscription-installment");
+  if (subscriptionPayment) openSubscriptionPayment(subscriptionPayment);
+  const subscriptionCancellation = event.target.closest(".cancel-subscription-installment");
+  if (subscriptionCancellation && confirm("Cancelar esta parcela de acesso?")) {
+    post(`/api/admin/estudios/${subscriptionCancellation.dataset.studio}/parcelas/${subscriptionCancellation.dataset.id}/cancelar`)
+      .then(async () => {
+        toast("Parcela cancelada.");
+        await openStudioBilling(subscriptionCancellation.dataset.studio);
+        await loadStudios();
+      }).catch(error => toast(error.message));
+  }
   const opportunityPlan = event.target.closest(".plan-opportunity");
   if (opportunityPlan) {
     post("/api/marketing/oportunidades/planejar", { key: opportunityPlan.dataset.key })
@@ -1690,6 +1786,9 @@ function clearApplicationState() {
   displayAccountPhoto("");
   $("#studioName").textContent = "Gestão do estúdio";
   $("#adminStudiosNav").hidden = true;
+  $$("[data-module]").forEach(element => { element.hidden = false; });
+  $("#notificationButton").hidden = false;
+  $("#homeFinanceSection").hidden = false;
   $$(".nav-link,.page").forEach(element => element.classList.remove("active"));
   $(`.nav-link[data-page="agenda"]`)?.classList.add("active");
   $("#agenda").classList.add("active");
@@ -1716,13 +1815,18 @@ async function startApplication(user) {
     $("#studioName").textContent = sessionUser.nome_estudio || "Gestão do estúdio";
     document.title = sessionUser.nome_estudio || "Gestão do estúdio";
     $("#adminStudiosNav").hidden = sessionUser.papel !== "SUPERADMIN";
+    $$("[data-module]").forEach(element => {
+      element.hidden = !hasModule(element.dataset.module);
+    });
+    $("#notificationButton").hidden = !hasModule("marketing");
+    $("#homeFinanceSection").hidden = !hasModule("financeiro");
   }
   try { localStorage.setItem("studio_authenticated", "1"); } catch {}
   document.body.classList.remove("auth-loading");
   document.body.classList.add("authenticated");
   if (applicationStarted) return;
   applicationStarted = true;
-  loadNotifications().catch(() => {});
+  if (hasModule("marketing")) loadNotifications().catch(() => {});
   api("/api/perfil").then(profile => displayAccountPhoto(profile.foto_perfil))
     .catch(() => {});
   setupPullToRefresh();
@@ -1730,6 +1834,9 @@ async function startApplication(user) {
     const savedPage = sessionStorage.getItem("activePage");
     const savedNav = savedPage ? $(`.nav-link[data-page="${savedPage}"]`) : null;
     if (savedNav && !savedNav.hidden && savedPage !== "agenda") savedNav.click();
+    else if ($(`.nav-link[data-page="agenda"]`)?.hidden) {
+      $$(".nav-link[data-page]").find(nav => !nav.hidden)?.click();
+    }
   } catch {}
   if ($("#agenda").classList.contains("active")) {
     showAgenda().catch(error => toast(error.message));
