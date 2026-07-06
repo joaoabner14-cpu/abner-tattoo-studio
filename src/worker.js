@@ -136,9 +136,10 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
       ORDER BY cr.data_vencimento, cr.numero_parcela
     `).bind(studioId).all();
     const { results: marketing } = await db.prepare(`
-      SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_evento
+      SELECT id,titulo,tipo,status,COALESCE(data_inicio,data_postagem) data_evento,
+        data_fim
       FROM planejamento_marketing
-      WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio) IS NOT NULL
+      WHERE id_estudio=? AND COALESCE(data_inicio,data_postagem) IS NOT NULL
         AND status NOT IN ('Encerrado')
     `).bind(studioId).all();
     if (!enabledModules.has("financeiro")) installments.length = 0;
@@ -172,15 +173,21 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
         }
       };
     });
-    const marketingEvents = marketing.map(item => ({
-      id: `marketing-${item.id}`,
-      title: `${item.tipo} · ${item.titulo}`,
-      start: item.data_evento,
-      allDay: true,
-      backgroundColor: "#8b5cf6",
-      borderColor: "#8b5cf6",
-      extendedProps: { tipo: "marketing", id_marketing: item.id }
-    }));
+    const marketingEvents = marketing.map(item => {
+      const validEnd = item.data_fim && item.data_fim >= item.data_evento;
+      return {
+        id: `marketing-${item.id}`,
+        title: `${item.tipo} · ${item.titulo}`,
+        start: item.data_evento,
+        // O FullCalendar usa uma data final exclusiva. O acréscimo mantém
+        // visível também o último dia informado no planejamento.
+        ...(validEnd ? { end: addDays(item.data_fim, 1) } : {}),
+        allDay: true,
+        backgroundColor: "#8b5cf6",
+        borderColor: "#8b5cf6",
+        extendedProps: { tipo: "marketing", id_marketing: item.id }
+      };
+    });
     return json([...appointments, ...payments, ...marketingEvents]);
   }
   const today = saoPauloDate();
