@@ -49,6 +49,22 @@ const applyInputMasks = (root = document) => {
   $$("[data-cpf]", root).forEach(maskCpf);
   $$("[data-cnpj]", root).forEach(maskCnpj);
 };
+const safeFileName = value => String(value || "cliente").normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-")
+  .replace(/^-+|-+$/g, "").toLowerCase();
+
+async function exportClientData(id, name) {
+  const data = await api(`/api/clientes/${id}/lgpd/exportar`);
+  const url = URL.createObjectURL(new Blob(
+    [JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }
+  ));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `dados-${safeFileName(name)}-${todaySp()}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  toast("Dados do cliente exportados.");
+}
 
 let calendar;
 let selectedClientId = null;
@@ -527,6 +543,22 @@ async function loadStudios() {
     </article>`).join("") || `<div class="panel empty">Nenhum estúdio cadastrado.</div>`}</div>`;
 }
 
+async function loadPrivacyDashboard() {
+  const data = await api("/api/lgpd");
+  const requests = data.solicitacoes.map(item => `<article class="card privacy-request ${item.status === "Aberta" ? "is-open" : ""}">
+    <div><strong>${escapeHtml(item.cliente)} · ${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_solicitacao)} · prazo ${dateBr(item.data_limite)} · ${escapeHtml(item.status)}</small></div>
+    <button class="secondary open-client-privacy" data-id="${item.id_cliente}">Abrir cliente</button>
+  </article>`).join("") || `<div class="card muted">Nenhuma solicitação registrada.</div>`;
+  const audit = data.auditoria.map(item => `<div class="privacy-audit-row">
+    <div><strong>${escapeHtml(item.acao)} · ${escapeHtml(item.recurso)}</strong><small>${escapeHtml(item.usuario)} · ${dateBr(item.data_evento)} · resposta ${item.resultado}</small></div>
+  </div>`).join("") || `<div class="card muted">Nenhuma operação registrada.</div>`;
+  $("#privacyPanel").innerHTML = `
+    <div class="stats privacy-stats"><div class="card stat"><span>Abertas</span><strong>${data.resumo.abertas}</strong></div><div class="card stat"><span>Em análise</span><strong>${data.resumo.em_analise}</strong></div><div class="card stat stat-late"><span>Prazo vencido</span><strong>${data.resumo.vencidas}</strong></div></div>
+    <div class="card privacy-contact"><strong>Canal dos titulares</strong><p>${escapeHtml(data.estudio.email_privacidade || "Não configurado")}</p><small>Aviso ${escapeHtml(data.estudio.versao_aviso_privacidade)} · retenção ${data.estudio.prazo_retencao_anos} anos</small></div>
+    <h2>Solicitações dos titulares</h2><div class="privacy-request-list">${requests}</div>
+    <h2>Registro de operações</h2><div class="privacy-audit">${audit}</div>`;
+}
+
 function openStudioEditor(studioId = "") {
   const item = studiosData.find(entry => String(entry.id) === String(studioId)) || {};
   $("#actionContent").innerHTML = `<header><h2>${item.id ? "Editar" : "Novo"} estúdio</h2><button class="close" type="button">×</button></header>
@@ -538,6 +570,7 @@ function openStudioEditor(studioId = "") {
       <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(item.cnpj)}"></label>
       <label>Endereço<textarea name="endereco">${escapeHtml(item.endereco)}</textarea></label>
       <label>Instagram<input name="instagram" value="${escapeHtml(item.instagram)}"></label>
+      <label>E-mail de privacidade<input name="email_privacidade" type="email" value="${escapeHtml(item.email_privacidade)}" required></label>
       ${item.id ? `<label class="check-label"><input name="ativo" type="checkbox" value="1" ${item.ativo ? "checked" : ""}> Estúdio ativo</label>` : ""}
       <button class="primary">${item.id ? "Salvar alterações" : "Criar estúdio e usuário"}</button>
       <p class="form-feedback" role="alert" aria-live="polite"></p>
@@ -725,7 +758,9 @@ async function loadClientLegacy(id) {
 
 async function loadClient(id) {
   selectedClientId = id;
-  const crm = await api(`/api/clientes/${id}/crm`);
+  const [crm, privacy] = await Promise.all([
+    api(`/api/clientes/${id}/crm`), api(`/api/clientes/${id}/lgpd`)
+  ]);
   const client = crm.cliente;
   const metrics = crm.indicadores;
   const alerts = crm.alertas.map(message =>
@@ -763,12 +798,20 @@ async function loadClient(id) {
   const timeline = crm.timeline.map(item => `<div class="crm-timeline-item">
     <span></span><div><strong>${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_evento)} · ${escapeHtml(item.descricao)}</small></div>
   </div>`).join("");
+  const privacyConfig = privacy.configuracao;
+  const privacyRequests = privacy.solicitacoes.map(item => `<form class="card lgpd-request-form" data-id="${item.id}">
+    <div class="card-head"><div><strong>${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_solicitacao)} · prazo ${dateBr(item.data_limite)}</small></div><span class="badge ${item.status === "Aberta" ? "badge-late" : ""}">${escapeHtml(item.status)}</span></div>
+    <p>${escapeHtml(item.descricao || "Sem descrição.")}</p>
+    <label>Status<select name="status">${["Aberta","Em analise","Concluida","Recusada"].map(status => `<option ${status === item.status ? "selected" : ""}>${status}</option>`).join("")}</select></label>
+    <label>Resposta<textarea name="resposta">${escapeHtml(item.resposta)}</textarea></label>
+    <button class="secondary">Atualizar solicitação</button>
+  </form>`).join("") || `<div class="card muted">Nenhuma solicitação LGPD registrada.</div>`;
   $("#clientDetail").classList.remove("empty");
   $("#clientDetail").innerHTML = `${alerts}<div class="crm-header">
     <label class="crm-client-photo">${client.tem_foto ? `<img src="/api/crm/cliente/${id}/foto?v=${Date.now()}" alt="Foto de ${escapeHtml(client.nome)}">` : `<span>👤</span>`}<input id="crmClientPhoto" type="file" accept="image/*" hidden></label>
     <div><h2>${escapeHtml(client.nome)}</h2><p>${escapeHtml(client.telefone)}${client.instagram ? ` · ${escapeHtml(client.instagram)}` : ""}</p><span class="badge">${escapeHtml(client.status)}</span></div>
   </div>
-  <div class="tabs crm-tabs"><button class="tab active" data-tab="crm-summary">Resumo</button><button class="tab" data-tab="crm-tattoos">Tatuagens</button><button class="tab" data-tab="crm-finance">Financeiro</button><button class="tab" data-tab="crm-appointments">Agendamentos</button><button class="tab" data-tab="crm-notes">Observações</button><button class="tab" data-tab="crm-timeline">Timeline</button></div>
+  <div class="tabs crm-tabs"><button class="tab active" data-tab="crm-summary">Resumo</button><button class="tab" data-tab="crm-tattoos">Tatuagens</button><button class="tab" data-tab="crm-finance">Financeiro</button><button class="tab" data-tab="crm-appointments">Agendamentos</button><button class="tab" data-tab="crm-notes">Observações</button><button class="tab" data-tab="crm-timeline">Timeline</button><button class="tab" data-tab="crm-privacy">Privacidade</button></div>
   <div class="tab-pane active" id="crm-summary">
     <div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Tatuagens</span><strong>${metrics.tatuagens}</strong></div><div class="card stat"><span>Última visita</span><strong>${dateBr(metrics.ultima_visita) || "—"}</strong></div><div class="card stat"><span>Próximo agendamento</span><strong>${dateBr(metrics.proximo_agendamento) || "—"}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div></div>
     <form id="crmClientForm">
@@ -784,7 +827,20 @@ async function loadClient(id) {
   <div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>
   <div class="tab-pane" id="crm-appointments">${appointments}</div>
   <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
-  <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>`;
+  <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>
+  <div class="tab-pane" id="crm-privacy">
+    <div class="card lgpd-notice"><strong>Canal de privacidade</strong><p>${escapeHtml(privacy.estudio.email_privacidade || "Não configurado")}</p><small>Retenção configurada: ${privacy.estudio.prazo_retencao_anos} anos · aviso ${escapeHtml(privacy.estudio.versao_aviso_privacidade)}</small></div>
+    <form id="crmPrivacyForm">
+      <label>Base legal dos dados cadastrais<select name="base_cadastro">${["Execucao de contrato","Consentimento","Obrigacao legal","Legitimo interesse"].map(value => `<option ${value === privacyConfig.base_cadastro ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      <label class="check-label"><input name="aceita_marketing" type="checkbox" value="1" ${privacyConfig.aceita_marketing ? "checked" : ""}> Cliente autorizou comunicações de marketing</label>
+      <input name="versao_aviso" type="hidden" value="${escapeHtml(privacy.estudio.versao_aviso_privacidade)}">
+      <button class="primary">Salvar privacidade</button>
+    </form>
+    <button class="secondary export-client-data" type="button" data-id="${id}" data-name="${escapeHtml(client.nome)}">Exportar dados do cliente</button>
+    <h2>Nova solicitação do titular</h2>
+    <form id="lgpdRequestForm"><label>Direito solicitado<select name="tipo">${["Acesso","Correcao","Anonimizacao","Bloqueio","Eliminacao","Portabilidade","Revogacao"].map(value => `<option>${value}</option>`).join("")}</select></label><label>Descrição<textarea name="descricao" required></textarea></label><button class="primary">Registrar solicitação</button></form>
+    <h2>Solicitações registradas</h2><div class="lgpd-request-list">${privacyRequests}</div>
+  </div>`;
   applyInputMasks($("#clientDetail"));
   const updateClient = async changes => {
     await api(`/api/clientes/${id}`, {
@@ -820,6 +876,37 @@ async function loadClient(id) {
       await loadClient(id);
     } catch (error) { toast(error.message); }
   };
+  $("#crmPrivacyForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await api(`/api/clientes/${id}/lgpd`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...Object.fromEntries(new FormData(form)),
+        aceita_marketing: form.elements.aceita_marketing.checked
+      })
+    });
+    toast("Configurações de privacidade salvas.");
+    await loadClient(id);
+    $("[data-tab=crm-privacy]", $("#clientDetail"))?.click();
+  };
+  $("#lgpdRequestForm").onsubmit = async event => {
+    event.preventDefault();
+    await send(`/api/clientes/${id}/lgpd/solicitacoes`, "POST", event.currentTarget);
+    toast("Solicitação LGPD registrada.");
+    await loadClient(id);
+    $("[data-tab=crm-privacy]", $("#clientDetail"))?.click();
+  };
+  $$(".lgpd-request-form", $("#clientDetail")).forEach(form => {
+    form.onsubmit = async event => {
+      event.preventDefault();
+      await send(`/api/clientes/${id}/lgpd/solicitacoes/${form.dataset.id}`,
+        "PUT", form);
+      toast("Solicitação atualizada.");
+      await loadClient(id);
+      $("[data-tab=crm-privacy]", $("#clientDetail"))?.click();
+    };
+  });
 }
 
 async function openCrmOrderEdit(orderId) {
@@ -959,6 +1046,7 @@ async function openProfile() {
       <label>Endereço<input name="endereco" value="${escapeHtml(profile.endereco)}"></label>
       <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(profile.cnpj)}"></label>
       <label>Instagram<input name="instagram" placeholder="@usuario" value="${escapeHtml(profile.instagram)}"></label>
+      <label>E-mail de privacidade<input name="email_privacidade" type="email" value="${escapeHtml(profile.email_privacidade)}" required><small class="muted">Canal para solicitações dos titulares de dados.</small></label>
       <button class="primary">Salvar informações</button>
     </form>
     <div class="profile-password">
@@ -1297,7 +1385,7 @@ document.addEventListener("input", event => {
 
 document.addEventListener("click", event => {
   const nav = event.target.closest(".nav-link");
-  if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") { loadFinance(); loadFinancialManagement(); } if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
+  if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") { loadFinance(); loadFinancialManagement(); } if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "privacidade") loadPrivacyDashboard().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
   if (event.target.closest("[data-open=appointment]")) openAppointment();
   if (event.target.closest("[data-open=client]")) openNewClient();
   if (event.target.closest(".close")) event.target.closest("dialog").close();
@@ -1306,6 +1394,18 @@ document.addEventListener("click", event => {
     $("#clientSearch").value = client.dataset.name;
     $("#clientList").innerHTML = "";
     loadClient(client.dataset.id);
+  }
+  const clientExport = event.target.closest(".export-client-data");
+  if (clientExport) {
+    exportClientData(clientExport.dataset.id, clientExport.dataset.name)
+      .catch(error => toast(error.message));
+  }
+  const clientPrivacy = event.target.closest(".open-client-privacy");
+  if (clientPrivacy) {
+    $(`.nav-link[data-page="clientes"]`)?.click();
+    loadClient(clientPrivacy.dataset.id).then(() =>
+      $("[data-tab=crm-privacy]", $("#clientDetail"))?.click()
+    ).catch(error => toast(error.message));
   }
   const order = event.target.closest(".open-order"); if (order && !order.dataset.os) openOrder(order.dataset.id);
   const signal = event.target.closest(".receive-signal");
