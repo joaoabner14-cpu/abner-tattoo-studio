@@ -221,9 +221,11 @@ async function clients(db, request, url) {
   if (request.method === "GET" && url.pathname === "/api/clientes") {
     const search = `%${url.searchParams.get("busca") || ""}%`;
     const { results } = await db.prepare(`
-      SELECT id, nome, telefone FROM clientes
-      WHERE nome LIKE ? COLLATE NOCASE ORDER BY nome LIMIT 100
-    `).bind(search).all();
+      SELECT id,nome,telefone,instagram,cpf FROM clientes
+      WHERE nome LIKE ? COLLATE NOCASE OR telefone LIKE ?
+        OR instagram LIKE ? COLLATE NOCASE OR cpf LIKE ?
+      ORDER BY nome LIMIT 100
+    `).bind(search, search, search, search).all();
     return json(results);
   }
   if (request.method === "GET" && /^\/api\/clientes\/\d+$/.test(url.pathname)) {
@@ -234,12 +236,19 @@ async function clients(db, request, url) {
   if (request.method === "PUT" && /^\/api\/clientes\/\d+$/.test(url.pathname)) {
     const id = integer(url.pathname.split("/").pop());
     const data = await body(request);
-    await db.prepare(`
+    const existing = await db.prepare("SELECT observacoes FROM clientes WHERE id=?").bind(id).first();
+    const statements = [db.prepare(`
       UPDATE clientes SET nome=?, telefone=?, cidade=?, instagram=?, cpf=?, rg=?,
-        data_nascimento=?, observacoes=? WHERE id=?
+        data_nascimento=?, observacoes=?,status=?,data_atualizacao=CURRENT_TIMESTAMP WHERE id=?
     `).bind(required(data.nome, "nome"), data.telefone || "", data.cidade || "",
       data.instagram || "", String(data.cpf || "").replace(/\D/g, "") || null, data.rg || "", data.data_nascimento || null,
-      data.observacoes || "", id).run();
+      data.observacoes || "", data.status || "Ativo", id)];
+    if ((existing?.observacoes || "") !== (data.observacoes || "")) {
+      statements.push(db.prepare(`
+        INSERT INTO crm_eventos(id_cliente,tipo,descricao) VALUES(?,'Observação',?)
+      `).bind(id, data.observacoes || "Observações removidas."));
+    }
+    await db.batch(statements);
     return json({ ok: true });
   }
   return null;
@@ -281,7 +290,7 @@ async function createAppointment(db, request) {
 async function openOrder(db, url) {
   const id = integer(url.searchParams.get("id"));
   const row = await db.prepare(`
-    SELECT a.id id_agendamento, a.data_hora, a.status status_agendamento,
+    SELECT a.id id_agendamento, a.data_hora, a.status status_agendamento,a.faltou,
       c.id id_cliente, c.nome, c.telefone, c.cidade, c.data_nascimento, c.instagram,
       c.cpf, c.rg, c.observacoes, os.id id_os, os.status, os.descricao,
       f.id id_financeiro, f.valor_orcado, f.valor_sinal, f.valor_adicional,
@@ -1144,6 +1153,130 @@ async function clientSummary(db, url) {
   })));
 }
 
+async function clientCrm(db, id) {
+  const client = await db.prepare(`
+    SELECT c.*,EXISTS(SELECT 1 FROM crm_fotos_clientes fc
+      WHERE fc.id_cliente=c.id) tem_foto
+    FROM clientes c WHERE c.id=?
+  `).bind(id).first();
+  if (!client) return error("Cliente não encontrado.", 404);
+  const { results: appointments } = await db.prepare(`
+    SELECT id,data_hora,valor_orcado,status,faltou,observacoes,data_criacao
+    FROM agendamentos WHERE id_cliente=? ORDER BY data_hora DESC
+  `).bind(id).all();
+  const { results: orders } = await db.prepare(`
+    SELECT os.id id_os,os.id_agendamento,os.descricao,os.regiao_corpo,
+      os.tempo_sessao_minutos,os.status status_os,os.data_execucao,os.data_criacao,
+      a.data_hora,a.status status_agendamento,a.faltou,
+      f.valor_final,COALESCE((SELECT SUM(CASE
+        WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
+        WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
+        FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago,
+      EXISTS(SELECT 1 FROM crm_fotos_tatuagens ft WHERE ft.id_os=os.id) tem_foto
+    FROM ordem_servico os
+    LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+    LEFT JOIN financeiro f ON f.id_os=os.id
+    WHERE os.id_cliente=? ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
+  `).bind(id).all();
+  const { results: payments } = await db.prepare(`
+    SELECT fm.id,fm.tipo,fm.valor,fm.forma_pagamento,fm.observacao,
+      COALESCE(fm.data_pagamento,fm.data_movimento) data_evento,f.id_os
+    FROM financeiro_movimentos fm
+    JOIN financeiro f ON f.id=fm.id_financeiro
+    WHERE f.id_cliente=?
+    ORDER BY COALESCE(fm.data_pagamento,fm.data_movimento) DESC
+  `).bind(id).all();
+  const { results: customEvents } = await db.prepare(`
+    SELECT id,tipo,descricao,data_evento,id_os,id_agendamento
+    FROM crm_eventos WHERE id_cliente=? ORDER BY data_evento DESC
+  `).bind(id).all();
+  const spent = payments.reduce((sum, item) =>
+    sum + (["Pagamento", "Sinal"].includes(item.tipo) ? Number(item.valor)
+      : item.tipo === "Estorno" ? -Number(item.valor) : 0), 0);
+  const completedOrders = orders.filter(item => item.status_agendamento === "Concluido");
+  const pending = orders.reduce((sum, item) =>
+    sum + (item.status_agendamento === "Cancelado" ? 0
+      : Math.max(0, Number(item.valor_final || 0) - Number(item.pago || 0))), 0);
+  const today = saoPauloDate();
+  const future = appointments.filter(item =>
+    item.data_hora.slice(0, 10) >= today &&
+    !["Cancelado", "Concluido"].includes(item.status) && !item.faltou)
+    .sort((a, b) => a.data_hora.localeCompare(b.data_hora));
+  const visits = appointments.filter(item => item.status === "Concluido")
+    .sort((a, b) => b.data_hora.localeCompare(a.data_hora));
+  const lastVisit = visits[0]?.data_hora || null;
+  const daysSinceVisit = lastVisit
+    ? Math.floor((Date.parse(`${today}T12:00:00Z`) -
+      Date.parse(`${lastVisit.slice(0, 10)}T12:00:00Z`)) / 86400000) : null;
+  const age = client.data_nascimento
+    ? Math.floor((Date.parse(`${today}T12:00:00Z`) -
+      Date.parse(`${client.data_nascimento}T12:00:00Z`)) / 31557600000) : null;
+  const timeline = [
+    { tipo: "Cadastro", descricao: "Cliente cadastrado.", data_evento: client.data_cadastro },
+    ...appointments.map(item => ({
+      tipo: item.faltou ? "Falta" : item.status === "Cancelado" ? "Cancelamento" : "Agendamento",
+      descricao: `${item.status}: ${brDateTime(item.data_hora)}`,
+      data_evento: item.data_hora, id_agendamento: item.id
+    })),
+    ...orders.map(item => ({
+      tipo: item.status_agendamento === "Concluido" ? "Sessão concluída" : "Ordem de serviço",
+      descricao: `OS #${item.id_os}${item.descricao ? ` · ${item.descricao}` : ""}`,
+      data_evento: item.data_hora || item.data_criacao,
+      id_os: item.id_os, id_agendamento: item.id_agendamento
+    })),
+    ...payments.map(item => ({
+      tipo: item.tipo, descricao: `${moneyText(item.valor)}${item.observacao ? ` · ${item.observacao}` : ""}`,
+      data_evento: item.data_evento, id_os: item.id_os
+    })),
+    ...customEvents
+  ].sort((a, b) => String(b.data_evento).localeCompare(String(a.data_evento)));
+  const alerts = [];
+  if (daysSinceVisit !== null && daysSinceVisit > 180)
+    alerts.push(`Cliente está há ${daysSinceVisit} dias sem tatuar.`);
+  if (client.data_nascimento?.slice(5, 7) === today.slice(5, 7))
+    alerts.push("Cliente faz aniversário neste mês.");
+  if (pending > 0) alerts.push(`Cliente possui ${moneyText(pending)} pendente.`);
+  if (future[0]?.data_hora.slice(0, 10) === saoPauloDate(1))
+    alerts.push("Cliente possui agendamento para amanhã.");
+  if (visits.some((visit, index) => {
+    const previousVisit = visits[index + 1];
+    return previousVisit && (Date.parse(visit.data_hora) -
+      Date.parse(previousVisit.data_hora)) / 86400000 > 180;
+  })) alerts.push("Cliente retornou após um longo período sem visitar o estúdio.");
+  const unanswered = orders.some(item => !item.pago && item.status_agendamento === "Agendado");
+  if (unanswered) alerts.push("Cliente possui orçamento sem pagamento ou resposta registrada.");
+  if (spent > 0) {
+    const ranking = await db.prepare(`
+      SELECT COUNT(*) melhores FROM (
+        SELECT f.id_cliente,SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
+          WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END) total
+        FROM financeiro_movimentos fm JOIN financeiro f ON f.id=fm.id_financeiro
+        GROUP BY f.id_cliente HAVING total>?
+      )
+    `).bind(spent).first();
+    if (Number(ranking.melhores) < 3) alerts.push("Cliente está entre os melhores clientes do estúdio.");
+  }
+  return json({
+    cliente: { ...client, idade: age },
+    indicadores: {
+      total_gasto: spent, tatuagens: completedOrders.length,
+      ticket_medio: completedOrders.length ? spent / completedOrders.length : 0,
+      pendente: pending, ultima_visita: lastVisit,
+      proximo_agendamento: future[0]?.data_hora || null,
+      dias_sem_visita: daysSinceVisit,
+      cancelamentos: appointments.filter(item => item.status === "Cancelado" && !item.faltou).length,
+      faltas: appointments.filter(item => item.faltou).length,
+      ultimo_pagamento: payments.find(item => ["Pagamento", "Sinal"].includes(item.tipo))?.data_evento || null
+    },
+    ordens: orders, agendamentos: appointments, pagamentos: payments,
+    alertas: alerts, timeline
+  });
+}
+
+const moneyText = value => Number(value || 0).toLocaleString("pt-BR", {
+  style: "currency", currency: "BRL"
+});
+
 const bytesToBase64 = bytes => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -1355,6 +1488,46 @@ async function authApi(db, request, url) {
 
 async function api(request, env, url) {
   const db = env.DB;
+  const crmMatch = url.pathname.match(/^\/api\/clientes\/(\d+)\/crm$/);
+  if (crmMatch && request.method === "GET") return clientCrm(db, integer(crmMatch[1]));
+  const crmPhotoMatch = url.pathname.match(/^\/api\/crm\/(cliente|tatuagem)\/(\d+)\/foto$/);
+  if (crmPhotoMatch) {
+    const table = crmPhotoMatch[1] === "cliente" ? "crm_fotos_clientes" : "crm_fotos_tatuagens";
+    const column = crmPhotoMatch[1] === "cliente" ? "id_cliente" : "id_os";
+    const id = integer(crmPhotoMatch[2]);
+    if (request.method === "GET") {
+      const photo = await db.prepare(
+        `SELECT mime_type,dados_base64 FROM ${table} WHERE ${column}=?`
+      ).bind(id).first();
+      if (!photo) return error("Foto não encontrada.", 404);
+      return new Response(base64ToBytes(photo.dados_base64), {
+        headers: { "content-type": photo.mime_type, "cache-control": "no-store" }
+      });
+    }
+    if (request.method === "POST") {
+      const data = await body(request);
+      const match = String(data.imagem || "").match(
+        /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/
+      );
+      if (!match || match[2].length > 1400000) return error("A foto é inválida ou muito grande.");
+      await db.prepare(`
+        INSERT INTO ${table}(${column},mime_type,dados_base64,data_atualizacao)
+        VALUES(?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(${column}) DO UPDATE SET mime_type=excluded.mime_type,
+          dados_base64=excluded.dados_base64,data_atualizacao=CURRENT_TIMESTAMP
+      `).bind(id, match[1], match[2]).run();
+      return json({ ok: true });
+    }
+  }
+  const crmOrderMatch = url.pathname.match(/^\/api\/crm\/os\/(\d+)$/);
+  if (crmOrderMatch && request.method === "PUT") {
+    const data = await body(request);
+    await db.prepare(`
+      UPDATE ordem_servico SET regiao_corpo=?,tempo_sessao_minutos=? WHERE id=?
+    `).bind(data.regiao_corpo || "", integer(data.tempo_sessao_minutos),
+      integer(crmOrderMatch[1])).run();
+    return json({ ok: true });
+  }
   if (url.pathname === "/api/notificacoes" && request.method === "GET") {
     const today = saoPauloDate();
     const todayTime = Date.parse(`${today}T12:00:00Z`);
@@ -1578,7 +1751,8 @@ async function api(request, env, url) {
   if (request.method === "POST" && url.pathname === "/api/agendamentos") return createAppointment(db, request);
   if (request.method === "PUT" && /^\/api\/agendamentos\/\d+$/.test(url.pathname)) {
     const data = await body(request);
-    const status = data.status === "Finalizado" ? "Concluido" : data.status;
+    const missed = data.status === "Falta";
+    const status = data.status === "Finalizado" ? "Concluido" : missed ? "Cancelado" : data.status;
     const allowedStatuses = ["Agendado", "Confirmado", "Concluido", "Cancelado", "Remarcado"];
     if (!allowedStatuses.includes(status)) return error("Status de agendamento inválido.", 400);
     const orderStatuses = {
@@ -1589,12 +1763,30 @@ async function api(request, env, url) {
       Remarcado: "Remarcada"
     };
     const appointmentId = integer(url.pathname.split("/").pop());
+    const previous = await db.prepare(
+      "SELECT id_cliente,data_hora,status,faltou FROM agendamentos WHERE id=?"
+    ).bind(appointmentId).first();
     const statements = [
-      db.prepare("UPDATE agendamentos SET data_hora=?,status=? WHERE id=?")
-        .bind(`${data.data} ${data.hora}:00`, status, appointmentId),
+      db.prepare("UPDATE agendamentos SET data_hora=?,status=?,faltou=? WHERE id=?")
+        .bind(`${data.data} ${data.hora}:00`, status, missed ? 1 : 0, appointmentId),
       db.prepare("UPDATE ordem_servico SET status=? WHERE id_agendamento=?")
         .bind(orderStatuses[status], appointmentId)
     ];
+    if (previous) {
+      const nextDate = `${data.data} ${data.hora}:00`;
+      if (previous.data_hora !== nextDate) statements.push(db.prepare(`
+        INSERT INTO crm_eventos(id_cliente,id_agendamento,tipo,descricao)
+        VALUES(?,?,'Reagendamento',?)
+      `).bind(previous.id_cliente, appointmentId,
+        `Horário alterado de ${brDateTime(previous.data_hora)} para ${brDateTime(nextDate)}.`));
+      if (previous.status !== status || Boolean(previous.faltou) !== missed) {
+        statements.push(db.prepare(`
+          INSERT INTO crm_eventos(id_cliente,id_agendamento,tipo,descricao)
+          VALUES(?,?,?,?)
+        `).bind(previous.id_cliente, appointmentId, missed ? "Falta" : "Status",
+          missed ? "Cliente não compareceu ao agendamento." : `Status alterado para ${status}.`));
+      }
+    }
     let signalRefund = 0;
     if (status === "Cancelado") {
       const financial = await db.prepare(`

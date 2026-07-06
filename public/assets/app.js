@@ -587,16 +587,16 @@ function openAppointment(date = "") {
 async function loadClients(search = "") {
   const requestId = ++clientSearchRequest;
   const term = search.trim();
-  if (term.length < 2) {
-    $("#clientList").innerHTML = `<p class="muted client-search-hint">Digite pelo menos 2 letras para localizar um cliente.</p>`;
+  if (term.length < 1) {
+    $("#clientList").innerHTML = `<p class="muted client-search-hint">Digite para localizar um cliente.</p>`;
     return;
   }
   const clients = await api(`/api/clientes?busca=${encodeURIComponent(term)}`);
   if (requestId !== clientSearchRequest) return;
-  $("#clientList").innerHTML = clients.map(c => `<button class="client-item select-client" data-id="${c.id}" data-name="${escapeHtml(c.nome)}"><strong>${escapeHtml(c.nome)}</strong><br><span class="muted">${escapeHtml(c.telefone)}</span></button>`).join("") || `<p class="muted client-search-hint">Nenhum cliente encontrado.</p>`;
+  $("#clientList").innerHTML = clients.map(c => `<button class="client-item select-client" data-id="${c.id}" data-name="${escapeHtml(c.nome)}"><strong>${escapeHtml(c.nome)}</strong><br><span class="muted">${escapeHtml(c.telefone)}${c.instagram ? ` · ${escapeHtml(c.instagram)}` : ""}${c.cpf ? ` · ${escapeHtml(c.cpf)}` : ""}</span></button>`).join("") || `<p class="muted client-search-hint">Nenhum cliente encontrado.</p>`;
 }
 
-async function loadClient(id) {
+async function loadClientLegacy(id) {
   selectedClientId = id;
   const [client, history, finance] = await Promise.all([
     api(`/api/clientes/${id}`), api(`/api/clientes/${id}/historico`), api(`/api/clientes/${id}/financeiro`)
@@ -654,6 +654,136 @@ async function loadClient(id) {
     $("#clientList").innerHTML = "";
     toast("Cadastro atualizado.");
   });
+}
+
+async function loadClient(id) {
+  selectedClientId = id;
+  const crm = await api(`/api/clientes/${id}/crm`);
+  const client = crm.cliente;
+  const metrics = crm.indicadores;
+  const alerts = crm.alertas.map(message =>
+    `<div class="crm-alert">${escapeHtml(message)}</div>`).join("");
+  const tattooHistory = crm.ordens.map(order => {
+    const status = order.faltou ? "Falta" : order.status_agendamento === "Concluido"
+      ? "Concluída" : order.status_agendamento === "Cancelado"
+        ? "Cancelada" : order.status_agendamento || order.status_os;
+    return `<article class="card crm-tattoo-card">
+      ${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy">` : `<div class="crm-photo-placeholder">Sem foto</div>`}
+      <div class="crm-tattoo-content"><div class="card-head"><div><strong>OS #${order.id_os}</strong><small>${dateBr(order.data_hora || order.data_criacao)} · ${escapeHtml(status)}</small></div>
+      ${order.id_agendamento ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
+      <p>${escapeHtml(order.descricao || "Sem descrição.")}</p>
+      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span><span>Valor<strong>${money(order.valor_final)}</strong></span><span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
+      <button class="secondary edit-crm-order" data-id="${order.id_os}">Editar informações</button></div>
+    </article>`;
+  }).join("") || `<div class="card muted">Nenhuma tatuagem registrada.</div>`;
+  const paymentHistory = crm.pagamentos.map(item => `<div class="financial-movement">
+    <div><strong>${escapeHtml(item.tipo)}</strong><span class="muted">${dateBr(item.data_evento)} · OS #${item.id_os || "-"}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}</span></div>
+    <strong>${item.tipo === "Estorno" ? "- " : ""}${money(item.valor)}</strong></div>`).join("") || `<div class="card muted">Nenhum pagamento registrado.</div>`;
+  const appointments = crm.agendamentos.map(item => {
+    const past = item.data_hora.slice(0, 10) < todaySp();
+    const status = item.faltou ? "Falta" : item.status;
+    return `<article class="card crm-appointment ${item.faltou || item.status === "Cancelado" ? "is-negative" : ""}">
+      <div><strong>${dateBr(item.data_hora)} às ${item.data_hora.slice(11,16)}</strong><small>${past ? "Passado" : "Próximo"} · ${escapeHtml(status)}</small></div>
+      <button class="secondary open-order" data-id="${item.id}">Abrir</button></article>`;
+  }).join("") || `<div class="card muted">Nenhum agendamento.</div>`;
+  const timeline = crm.timeline.map(item => `<div class="crm-timeline-item">
+    <span></span><div><strong>${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_evento)} · ${escapeHtml(item.descricao)}</small></div>
+  </div>`).join("");
+  $("#clientDetail").classList.remove("empty");
+  $("#clientDetail").innerHTML = `${alerts}<div class="crm-header">
+    <label class="crm-client-photo">${client.tem_foto ? `<img src="/api/crm/cliente/${id}/foto?v=${Date.now()}" alt="Foto de ${escapeHtml(client.nome)}">` : `<span>👤</span>`}<input id="crmClientPhoto" type="file" accept="image/*" hidden></label>
+    <div><h2>${escapeHtml(client.nome)}</h2><p>${escapeHtml(client.telefone)}${client.instagram ? ` · ${escapeHtml(client.instagram)}` : ""}</p><span class="badge">${escapeHtml(client.status)}</span></div>
+  </div>
+  <div class="tabs crm-tabs"><button class="tab active" data-tab="crm-summary">Resumo</button><button class="tab" data-tab="crm-tattoos">Tatuagens</button><button class="tab" data-tab="crm-finance">Financeiro</button><button class="tab" data-tab="crm-appointments">Agendamentos</button><button class="tab" data-tab="crm-notes">Observações</button><button class="tab" data-tab="crm-timeline">Timeline</button></div>
+  <div class="tab-pane active" id="crm-summary">
+    <div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Tatuagens</span><strong>${metrics.tatuagens}</strong></div><div class="card stat"><span>Última visita</span><strong>${dateBr(metrics.ultima_visita) || "—"}</strong></div><div class="card stat"><span>Próximo agendamento</span><strong>${dateBr(metrics.proximo_agendamento) || "—"}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div></div>
+    <form id="crmClientForm">
+      <div class="fields"><label>Nome<input name="nome" value="${escapeHtml(client.nome)}" required></label><label>Telefone<input name="telefone" value="${escapeHtml(client.telefone)}"></label></div>
+      <div class="fields"><label>Instagram<input name="instagram" value="${escapeHtml(client.instagram)}"></label><label>Cidade<input name="cidade" value="${escapeHtml(client.cidade)}"></label></div>
+      <div class="fields"><label>CPF<input name="cpf" data-cpf value="${escapeHtml(client.cpf)}"></label><label>RG<input name="rg" value="${escapeHtml(client.rg)}"></label></div>
+      <div class="fields"><label>Nascimento<input name="data_nascimento" type="date" value="${client.data_nascimento || ""}"></label><label>Status<select name="status"><option ${client.status === "Ativo" ? "selected" : ""}>Ativo</option><option ${client.status === "Inativo" ? "selected" : ""}>Inativo</option></select></label></div>
+      <div class="crm-profile-facts"><span>Idade<strong>${client.idade ?? "—"}</strong></span><span>Cliente desde<strong>${dateBr(client.data_cadastro)}</strong></span><span>Dias sem visita<strong>${metrics.dias_sem_visita ?? "—"}</strong></span><span>Cancelamentos / faltas<strong>${metrics.cancelamentos} / ${metrics.faltas}</strong></span></div>
+      <button class="primary">Salvar cadastro</button>
+    </form>
+  </div>
+  <div class="tab-pane" id="crm-tattoos">${tattooHistory}</div>
+  <div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>
+  <div class="tab-pane" id="crm-appointments">${appointments}</div>
+  <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
+  <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>`;
+  applyInputMasks($("#clientDetail"));
+  const updateClient = async changes => {
+    await api(`/api/clientes/${id}`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        nome: client.nome, telefone: client.telefone, cidade: client.cidade,
+        instagram: client.instagram, cpf: client.cpf, rg: client.rg,
+        data_nascimento: client.data_nascimento, observacoes: client.observacoes,
+        status: client.status, ...changes
+      })
+    });
+    toast("Cadastro atualizado.");
+    await loadClient(id);
+  };
+  $("#crmClientForm").onsubmit = event => {
+    event.preventDefault();
+    updateClient(Object.fromEntries(new FormData(event.currentTarget)))
+      .catch(error => toast(error.message));
+  };
+  $("#crmNotesForm").onsubmit = event => {
+    event.preventDefault();
+    updateClient({ observacoes: event.currentTarget.elements.observacoes.value })
+      .catch(error => toast(error.message));
+  };
+  $("#crmClientPhoto").onchange = async event => {
+    try {
+      const image = await loadProfilePhoto(event.target.files[0]);
+      const size = Math.min(image.width, image.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 480;
+      canvas.getContext("2d").drawImage(image,(image.width-size)/2,(image.height-size)/2,size,size,0,0,480,480);
+      await post(`/api/crm/cliente/${id}/foto`, { imagem: canvas.toDataURL("image/jpeg", .82) });
+      await loadClient(id);
+    } catch (error) { toast(error.message); }
+  };
+}
+
+async function openCrmOrderEdit(orderId) {
+  const crm = await api(`/api/clientes/${selectedClientId}/crm`);
+  const order = crm.ordens.find(item => String(item.id_os) === String(orderId));
+  if (!order) return toast("Ordem de serviço não encontrada.");
+  $("#actionContent").innerHTML = `<header><h2>Informações da tatuagem</h2><button class="close" type="button">×</button></header>
+    <form id="crmOrderForm">
+      <label class="marketing-art-field"><span id="crmTattooPreview" class="marketing-art-preview">${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto?v=${Date.now()}" alt="Foto da tatuagem">` : "Adicionar foto da tatuagem"}</span><span>${order.tem_foto ? "Substituir foto" : "Escolher foto"}</span><input name="foto" type="file" accept="image/*" hidden></label>
+      <label>Região do corpo<input name="regiao_corpo" value="${escapeHtml(order.regiao_corpo)}"></label>
+      <label>Tempo de sessão em minutos<input name="tempo_sessao_minutos" type="number" min="0" step="1" value="${order.tempo_sessao_minutos || ""}"></label>
+      <button class="primary">Salvar informações</button>
+    </form>`;
+  $("#actionDialog").showModal();
+  let photo = "";
+  $("#crmOrderForm").elements.foto.onchange = async event => {
+    try {
+      const image = await loadProfilePhoto(event.target.files[0]);
+      const scale = Math.min(1, 1200 / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      canvas.getContext("2d").drawImage(image,0,0,canvas.width,canvas.height);
+      photo = canvas.toDataURL("image/jpeg",.82);
+      $("#crmTattooPreview").innerHTML = `<img src="${photo}" alt="Prévia">`;
+    } catch (error) { toast(error.message); }
+  };
+  $("#crmOrderForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    form.elements.foto.disabled = true;
+    await send(`/api/crm/os/${order.id_os}`, "PUT", form);
+    if (photo) await post(`/api/crm/tatuagem/${order.id_os}/foto`, { imagem: photo });
+    $("#actionDialog").close();
+    await loadClient(selectedClientId);
+    $("[data-tab=crm-tattoos]", $("#clientDetail"))?.click();
+    toast("Informações da tatuagem atualizadas.");
+  };
 }
 
 function openNewClient() {
@@ -989,9 +1119,11 @@ async function openOrder(appointmentId, initialTab = "os-data") {
     ["Agendado", "Agendado"],
     ["Confirmado", "Confirmado"],
     ["Concluido", "Finalizado"],
+    ["Falta", "Falta"],
     ["Cancelado", "Cancelado"],
     ["Remarcado", "Remarcado"]
   ];
+  const currentAppointmentStatus = data.faltou ? "Falta" : data.status_agendamento;
   const installmentHtml = data.parcelas.length ? `<div class="installment-list">${data.parcelas.map(item => {
     const late = item.status !== "Pago" && item.data_vencimento < today;
     const status = item.status === "Pago" ? "Pago" : late ? "Atrasado" : "Pendente";
@@ -1047,7 +1179,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
       <h2>Receitas de tintas</h2>${inkRecipeHtml}
       <h2>Outros materiais utilizados</h2>${materialHtml}
     </div>
-    <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${appointmentStatuses.map(([value, label]) => `<option value="${value}" ${value === data.status_agendamento ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
+    <div class="tab-pane" id="os-schedule"><form id="scheduleForm"><div class="fields"><label>Data<input name="data" type="date" value="${date}"></label><label>Hora<input name="hora" type="time" value="${time.slice(0,5)}"></label></div><label>Status<select name="status">${appointmentStatuses.map(([value, label]) => `<option value="${value}" ${value === currentAppointmentStatus ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary">Salvar</button></form></div>
     <div class="tab-pane" id="os-finance"><div class="stats"><div class="card stat">Valor final<strong>${money(data.valor_final)}</strong></div><div class="card stat">Total pago<strong>${money(data.total_pago)}</strong></div><div class="card stat">Saldo aberto<strong>${money(data.saldo_aberto)}</strong></div></div>
       <div class="finance-actions"><button class="primary" type="button" data-finance-action="payment">Registrar pagamento</button>
       ${!data.parcelas.length && data.saldo_aberto > 0 ? `<button class="secondary" type="button" data-finance-action="credit">Criar crediário</button>` : ""}
@@ -1100,6 +1232,8 @@ document.addEventListener("click", event => {
   if (financeAction) openFinanceAction(financeAction.dataset.financeAction);
   const serviceAction = event.target.closest("[data-service-action]");
   if (serviceAction) openServiceAction(serviceAction.dataset.serviceAction);
+  const crmOrder = event.target.closest(".edit-crm-order");
+  if (crmOrder) openCrmOrderEdit(crmOrder.dataset.id);
   const stockAction = event.target.closest("[data-stock-action]");
   if (stockAction) openStockAction(stockAction.dataset.stockAction, stockAction.dataset.id);
   const marketingAction = event.target.closest("[data-marketing-action]");
