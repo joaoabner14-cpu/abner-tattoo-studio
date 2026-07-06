@@ -65,6 +65,72 @@ const safeFileName = value => String(value || "cliente").normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-")
   .replace(/^-+|-+$/g, "").toLowerCase();
 
+const bufferToBase64 = buffer => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+  }
+  return btoa(binary);
+};
+const base64ToBuffer = value => {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+};
+async function exportEncryptionKey(password, salt, usage) {
+  const material = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey({
+    name: "PBKDF2", hash: "SHA-256", salt, iterations: 310000
+  }, material, { name: "AES-GCM", length: 256 }, false, usage);
+}
+async function encryptStudioExport(data, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await exportEncryptionKey(password, salt, ["encrypt"]);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv }, key,
+    new TextEncoder().encode(JSON.stringify(data))
+  );
+  return {
+    formato: "abner-tattoo-studio-export-criptografado",
+    versao: 1, algoritmo: "AES-256-GCM",
+    derivacao: { algoritmo: "PBKDF2-SHA256", iteracoes: 310000 },
+    salt: bufferToBase64(salt), iv: bufferToBase64(iv),
+    dados_criptografados: bufferToBase64(encrypted)
+  };
+}
+async function decryptStudioExport(envelope, password) {
+  if (envelope.formato !== "abner-tattoo-studio-export-criptografado") {
+    throw new Error("Este não é um arquivo de exportação criptografado válido.");
+  }
+  const salt = base64ToBuffer(envelope.salt);
+  const iv = base64ToBuffer(envelope.iv);
+  const key = await exportEncryptionKey(password, salt, ["decrypt"]);
+  try {
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv }, key,
+      base64ToBuffer(envelope.dados_criptografados)
+    );
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch {
+    throw new Error("Senha incorreta ou arquivo corrompido.");
+  }
+}
+function downloadJson(data, name) {
+  const url = URL.createObjectURL(new Blob(
+    [JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }
+  ));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 async function exportClientData(id, name) {
   const data = await api(`/api/clientes/${id}/lgpd/exportar`);
   const url = URL.createObjectURL(new Blob(
@@ -560,7 +626,6 @@ async function loadStudios() {
         <button class="secondary" data-studio-action="edit" data-id="${item.id}">Editar</button>
         <button class="secondary studio-users" data-id="${item.id}">Usuários</button>
         ${String(item.id) !== String(sessionUser?.id_estudio) ? `<button class="secondary studio-billing" data-id="${item.id}">Mensalidades</button>` : ""}
-        <button class="secondary export-studio" data-id="${item.id}" data-name="${escapeHtml(item.nome_estudio)}">Exportar dados</button>
       </div>
     </article>`).join("") || `<div class="panel empty">Nenhum estúdio cadastrado.</div>`}</div>`;
 }
@@ -744,17 +809,68 @@ function openSubscriptionPayment(trigger) {
   };
 }
 
-async function exportStudioData(studioId, name) {
-  const data = await api(`/api/admin/estudios/${studioId}/exportar`);
-  const url = URL.createObjectURL(new Blob(
-    [JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }
-  ));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `exportacao-${safeFileName(name)}-${todaySp()}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
-  toast("Dados do estúdio exportados.");
+function openSecureStudioExport() {
+  $("#actionContent").innerHTML = `<header><h2>Exportação segura</h2><button class="close" type="button">×</button></header>
+    <div class="card secure-export-notice"><strong>Somente quem souber esta senha poderá abrir o arquivo.</strong>
+      <small>A senha é usada apenas neste aparelho e não será enviada nem armazenada pelo sistema. Guarde-a separadamente.</small></div>
+    <form id="secureStudioExportForm">
+      <label>Senha do arquivo<input name="senha" type="password" minlength="10" autocomplete="new-password" required></label>
+      <label>Repita a senha<input name="confirmacao" type="password" minlength="10" autocomplete="new-password" required></label>
+      <button class="primary">Criptografar e baixar</button>
+      <p class="form-feedback" role="alert"></p>
+    </form>`;
+  if (!$("#actionDialog").open) $("#actionDialog").showModal();
+  $("#secureStudioExportForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const feedback = $(".form-feedback", form);
+    const password = form.elements.senha.value;
+    if (password !== form.elements.confirmacao.value) {
+      feedback.textContent = "As senhas informadas não são iguais.";
+      return;
+    }
+    const button = form.querySelector("button[type='submit'],button.primary");
+    button.disabled = true;
+    button.textContent = "Preparando exportação...";
+    try {
+      const data = await api("/api/estudio/exportar");
+      const encrypted = await encryptStudioExport(data, password);
+      downloadJson(encrypted,
+        `exportacao-${safeFileName(data.estudio.nome_estudio)}-${todaySp()}.ats`);
+      $("#actionDialog").close();
+      toast("Exportação criptografada concluída.");
+    } catch (error) {
+      feedback.textContent = error.message;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Criptografar e baixar";
+    }
+  };
+}
+
+function openSecureExportReader() {
+  $("#actionContent").innerHTML = `<header><h2>Abrir exportação protegida</h2><button class="close" type="button">×</button></header>
+    <form id="secureExportReaderForm">
+      <label>Arquivo protegido<input name="arquivo" type="file" accept=".ats,application/json" required></label>
+      <label>Senha do arquivo<input name="senha" type="password" autocomplete="current-password" required></label>
+      <button class="primary">Descriptografar arquivo</button>
+      <p class="form-feedback" role="alert"></p>
+    </form>`;
+  if (!$("#actionDialog").open) $("#actionDialog").showModal();
+  $("#secureExportReaderForm").onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const feedback = $(".form-feedback", form);
+    try {
+      const envelope = JSON.parse(await form.elements.arquivo.files[0].text());
+      const data = await decryptStudioExport(envelope, form.elements.senha.value);
+      downloadJson(data,
+        `dados-${safeFileName(data.estudio?.nome_estudio)}-${todaySp()}.json`);
+      toast("Arquivo descriptografado.");
+    } catch (error) {
+      feedback.textContent = error.message;
+    }
+  };
 }
 
 function openStockAction(action, itemId = "") {
@@ -1218,6 +1334,8 @@ async function openWhatsAppSummaryPreview() {
 
 async function openProfile() {
   const profile = await api("/api/perfil");
+  const canExportStudio = sessionUser?.papel === "SUPERADMIN" ||
+    sessionUser?.perfil_acesso === "ADMINISTRADOR";
   profilePhotoData = profile.foto_perfil || "";
   $("#actionContent").innerHTML = `<header><h2>Perfil e estúdio</h2><button class="close" type="button">×</button></header>
     <form id="profileForm">
@@ -1248,6 +1366,11 @@ async function openProfile() {
       <label>Retenção de dados em anos<input name="prazo_retencao_anos" type="number" min="0" step="1" value="${profile.prazo_retencao_anos || ""}" placeholder="Não configurado"><small class="muted">Defina conforme a política geral do estúdio.</small></label>
       <button class="primary">Salvar informações</button>
     </form>
+    ${canExportStudio ? `<div class="secure-export-actions">
+      <h2>Dados do estúdio</h2>
+      <button class="secondary secure-studio-export" type="button">Exportar arquivo protegido</button>
+      <button class="secondary secure-export-reader" type="button">Abrir exportação protegida</button>
+    </div>` : ""}
     <div class="profile-password">
       <h2>Atualizar senha</h2>
       <form id="passwordForm">
@@ -1652,9 +1775,8 @@ document.addEventListener("click", event => {
   const backStudioUsers = event.target.closest(".back-studio-users");
   if (backStudioUsers) openStudioUsers(backStudioUsers.dataset.studio)
     .catch(error => toast(error.message));
-  const studioExport = event.target.closest(".export-studio");
-  if (studioExport) exportStudioData(studioExport.dataset.id, studioExport.dataset.name)
-    .catch(error => toast(error.message));
+  if (event.target.closest(".secure-studio-export")) openSecureStudioExport();
+  if (event.target.closest(".secure-export-reader")) openSecureExportReader();
   const subscriptionPayment = event.target.closest(".pay-subscription-installment");
   if (subscriptionPayment) openSubscriptionPayment(subscriptionPayment);
   const subscriptionCancellation = event.target.closest(".cancel-subscription-installment");

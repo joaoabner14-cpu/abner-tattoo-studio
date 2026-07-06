@@ -1921,8 +1921,10 @@ async function studioAdministration(db, request, url, user) {
   }
   const exportMatch = url.pathname.match(/^\/api\/admin\/estudios\/(\d+)\/exportar$/);
   if (exportMatch && request.method === "GET") {
-    const exported = await studioDataExport(db, integer(exportMatch[1]));
-    return exported ? json(exported) : error("Estúdio não encontrado.", 404);
+    return error(
+      "A exportação só pode ser realizada pelo administrador do próprio estúdio.",
+      403
+    );
   }
   const subscriptionMatch = url.pathname.match(
     /^\/api\/admin\/estudios\/(\d+)\/assinatura$/
@@ -2376,6 +2378,13 @@ async function api(request, env, url, user) {
   const missingModule = requiredModules(url.pathname)
     .find(module => !enabledModules.has(module));
   if (missingModule) return error("Este módulo não está habilitado para o estúdio.", 403);
+  if (url.pathname === "/api/estudio/exportar" && request.method === "GET") {
+    if (user.papel !== "SUPERADMIN" && user.perfil_acesso !== "ADMINISTRADOR") {
+      return error("Somente o administrador do estúdio pode exportar os dados.", 403);
+    }
+    const exported = await studioDataExport(db, studioId);
+    return exported ? json(exported) : error("Estúdio não encontrado.", 404);
+  }
   if (url.pathname === "/api/lgpd" && request.method === "GET") {
     const { results: requests } = await db.prepare(`
       SELECT ls.*,c.nome cliente
@@ -2876,7 +2885,7 @@ export default {
         }
         const response = await api(request, env, url, user);
         const shouldAudit = !["GET", "HEAD"].includes(request.method) ||
-          /\/lgpd\/exportar$/.test(url.pathname);
+          /\/(?:lgpd\/)?exportar$/.test(url.pathname);
         if (shouldAudit) {
           try {
             await env.DB.prepare(`
