@@ -183,8 +183,9 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
         // visível também o último dia informado no planejamento.
         ...(validEnd ? { end: addDays(item.data_fim, 1) } : {}),
         allDay: true,
-        backgroundColor: "#8b5cf6",
-        borderColor: "#8b5cf6",
+        backgroundColor: "#e6cf8a",
+        borderColor: "#e6cf8a",
+        textColor: "#282114",
         extendedProps: { tipo: "marketing", id_marketing: item.id }
       };
     });
