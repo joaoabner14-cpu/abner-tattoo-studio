@@ -1180,7 +1180,23 @@ async function openOrder(appointmentId, initialTab = "os-data") {
   </article>`).join("") || `<div class="card muted">Nenhuma mistura de tinta registrada.</div>`;
   $("#orderContent").innerHTML = `<header><h2>Ordem de serviço #${data.id_os}</h2><button class="close" type="button">×</button></header>
     <div class="tabs"><button class="tab active" data-tab="os-data">Cliente</button><button class="tab" data-tab="os-service">Serviço</button><button class="tab" data-tab="os-schedule">Agendamento</button><button class="tab" data-tab="os-finance">Financeiro</button></div>
-    <div class="tab-pane active" id="os-data"><h2>${escapeHtml(data.nome)}</h2><p>${escapeHtml(data.telefone)} · ${escapeHtml(data.cidade)}</p><p class="muted">${escapeHtml(data.observacoes)}</p></div>
+    <div class="tab-pane active" id="os-data">
+      <div class="crm-header order-client-header">
+        <div class="crm-client-photo">${data.tem_foto_cliente ? `<img src="/api/crm/cliente/${data.id_cliente}/foto" alt="Foto de ${escapeHtml(data.nome)}">` : `<span>👤</span>`}</div>
+        <div><h2>${escapeHtml(data.nome)}</h2><span class="badge">${escapeHtml(data.status_cliente || "Ativo")}</span></div>
+      </div>
+      <div class="crm-profile-facts order-client-facts">
+        <span>Telefone<strong>${escapeHtml(data.telefone || "Não informado")}</strong></span>
+        <span>Cidade<strong>${escapeHtml(data.cidade || "Não informada")}</strong></span>
+        <span>Instagram<strong>${escapeHtml(data.instagram || "Não informado")}</strong></span>
+        <span>Nascimento<strong>${data.data_nascimento ? dateBr(data.data_nascimento) : "Não informado"}</strong></span>
+        <span>CPF<strong>${escapeHtml(data.cpf || "Não informado")}</strong></span>
+        <span>RG<strong>${escapeHtml(data.rg || "Não informado")}</strong></span>
+        <span>Cadastro<strong>${dateBr(data.data_cadastro)}</strong></span>
+        <span>Status<strong>${escapeHtml(data.status_cliente || "Ativo")}</strong></span>
+      </div>
+      <div class="card order-client-notes"><span class="muted">Observações</span><p>${escapeHtml(data.observacoes || "Nenhuma observação cadastrada.")}</p></div>
+    </div>
     <div class="tab-pane" id="os-service"><div class="card service-summary"><span class="muted">Descrição atual</span><p>${escapeHtml(data.descricao || "Nenhuma descrição registrada.")}</p></div>
       <div class="finance-actions service-actions"><button class="primary" type="button" data-service-action="description">Editar descrição</button><button class="secondary" type="button" data-service-action="ink">Mistura de tintas</button><button class="secondary" type="button" data-service-action="material">Adicionar material</button></div>
       <h2>Receitas de tintas</h2>${inkRecipeHtml}

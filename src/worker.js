@@ -292,7 +292,10 @@ async function openOrder(db, url) {
   const row = await db.prepare(`
     SELECT a.id id_agendamento, a.data_hora, a.status status_agendamento,a.faltou,
       c.id id_cliente, c.nome, c.telefone, c.cidade, c.data_nascimento, c.instagram,
-      c.cpf, c.rg, c.observacoes, os.id id_os, os.status, os.descricao,
+      c.cpf, c.rg, c.observacoes, c.status status_cliente, c.data_cadastro,
+      EXISTS(SELECT 1 FROM crm_fotos_clientes fc
+        WHERE fc.id_cliente=c.id) tem_foto_cliente,
+      os.id id_os, os.status, os.descricao,
       f.id id_financeiro, f.valor_orcado, f.valor_sinal, f.valor_adicional,
       f.valor_desconto, f.valor_final, f.forma_pagamento, f.sinal_pago,
       f.data_pagamento_sinal
