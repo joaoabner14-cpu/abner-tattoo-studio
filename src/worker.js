@@ -1147,7 +1147,31 @@ async function financialManagement(db, request, url, studioId) {
       .bind(launchId).run();
     return json({ ok: true });
   }
+  if (request.method === "PUT" && url.pathname === "/api/financeiro/gestao/saldo-inicial") {
+    const data = await body(request);
+    const initialBalance = number(data.saldo_inicial_caixa);
+    if (initialBalance < 0) return error("O saldo inicial nÃ£o pode ser negativo.");
+    const initialDate = /^\d{4}-\d{2}-\d{2}$/.test(data.data_saldo_inicial_caixa || "")
+      ? data.data_saldo_inicial_caixa : today;
+    await db.prepare(`
+      UPDATE estudios
+      SET saldo_inicial_caixa=?,data_saldo_inicial_caixa=?,data_atualizacao=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).bind(initialBalance, initialDate, studioId).run();
+    return json({ ok: true });
+  }
   if (request.method === "GET" && url.pathname === "/api/financeiro/gestao") {
+    const studioCash = await db.prepare(`
+      SELECT saldo_inicial_caixa,data_saldo_inicial_caixa
+      FROM estudios WHERE id=?
+    `).bind(studioId).first();
+    const allCash = await db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
+        COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
+      FROM caixa
+      WHERE id_estudio=? AND status='Ativo'
+    `).bind(studioId).first();
     const cash = await db.prepare(`
       SELECT
         COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
@@ -1264,6 +1288,10 @@ async function financialManagement(db, request, url, studioId) {
       resumo: {
         entradas: cash.entradas, saidas: cash.saidas,
         resultado: cash.entradas - cash.saidas,
+        saldo_inicial_caixa: Number(studioCash?.saldo_inicial_caixa || 0),
+        data_saldo_inicial_caixa: studioCash?.data_saldo_inicial_caixa || null,
+        saldo_caixa: Number(studioCash?.saldo_inicial_caixa || 0) +
+          Number(allCash.entradas || 0) - Number(allCash.saidas || 0),
         receber: manualReceivable.total +
           monthlyClientReceivables.reduce((sum, item) => sum + item.saldo, 0),
         pagar: payable.total,

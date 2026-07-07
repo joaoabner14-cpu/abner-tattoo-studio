@@ -199,6 +199,8 @@ async function loadFinancialManagement(
       <button class="card stat income summary-card" data-summary="entradas"><span class="muted">Entradas</span><strong>${money(summary.entradas)}</strong></button>
       <button class="card stat expense summary-card" data-summary="saidas"><span class="muted">Saídas</span><strong>${money(summary.saidas)}</strong></button>
       <button class="card stat summary-card ${summary.resultado < 0 ? "stat-late" : ""}" data-summary="resultado"><span class="muted">Resultado</span><strong>${money(summary.resultado)}</strong></button>
+      <div class="card stat"><span class="muted">Saldo inicial</span><strong>${money(summary.saldo_inicial_caixa)}</strong><small>${summary.data_saldo_inicial_caixa ? `Desde ${dateBr(summary.data_saldo_inicial_caixa)}` : "Não configurado"}</small></div>
+      <div class="card stat ${summary.saldo_caixa < 0 ? "stat-late" : ""}"><span class="muted">Saldo em caixa</span><strong>${money(summary.saldo_caixa)}</strong><small>Inicial + caixa ativo</small></div>
       <button class="card stat summary-card" data-summary="receber"><span class="muted">A receber</span><strong>${money(summary.receber)}</strong></button>
       <button class="card stat summary-card" data-summary="pagar"><span class="muted">A pagar</span><strong>${money(summary.pagar)}</strong></button>
       <button class="card stat stat-late summary-card" data-summary="atraso"><span class="muted">Em atraso</span><strong>${money(summary.atrasado)}</strong></button>
@@ -206,6 +208,7 @@ async function loadFinancialManagement(
     <section class="card mei-card"><div class="card-head"><div><span class="eyebrow">MEI 2026</span><h2>Faturamento anual</h2></div><strong>${money(summary.faturamento_anual)} / ${money(summary.limite_mei)}</strong></div>
       <div class="mei-progress"><span style="width:${limitPercent}%"></span></div><small class="muted">${limitPercent.toFixed(1).replace(".", ",")}% do limite anual. Receitas a prazo devem ser conferidas pelo mês da prestação para o relatório oficial.</small></section>
     <div class="management-actions"><button class="primary" data-management-action="Receita">Registrar receita</button><button class="secondary" data-management-action="Despesa">Registrar despesa</button>
+      <button class="secondary" type="button" data-management-initial-balance>Saldo inicial</button>
       <button class="secondary" data-management-action="Conta">Conta a pagar</button><button class="secondary" data-management-action="DAS">Cadastrar DAS</button></div>
     <div class="management-columns"><section><h2>Contas pendentes</h2>${pending}</section><section><h2>Despesas por categoria</h2><div class="card category-list">${categories}</div></section></div>
     <h2>Fluxo de caixa ${managementData.visao === "mensal" ? "do mês" : "do período"}</h2><div class="management-history">${cash}</div>
@@ -334,6 +337,27 @@ function openManagementAction(action) {
     await send("/api/financeiro/gestao", "POST", event.currentTarget);
     $("#actionDialog").close(); toast("Lançamento financeiro salvo.");
     await loadFinancialManagement(month); await loadFinance();
+  };
+}
+
+function openManagementInitialBalance() {
+  const summary = managementData?.resumo || {};
+  $("#actionContent").innerHTML = `<header><h2>Saldo inicial de caixa</h2><button class="close" type="button">×</button></header>
+    <form id="initialBalanceForm">
+      <p class="muted action-help">Informe quanto havia em caixa antes de começar a usar o sistema. Esse valor entra no saldo em caixa, mas não conta como entrada do mês.</p>
+      <label>Valor em caixa<input name="saldo_inicial_caixa" data-money inputmode="numeric" value="${moneyInput(summary.saldo_inicial_caixa || 0)}" required></label>
+      <label>Data de referência<input name="data_saldo_inicial_caixa" type="date" value="${summary.data_saldo_inicial_caixa || todaySp()}" required></label>
+      <button class="primary">Salvar saldo inicial</button>
+    </form>`;
+  applyInputMasks($("#actionContent"));
+  $("#actionDialog").showModal();
+  $("#initialBalanceForm").onsubmit = async event => {
+    event.preventDefault();
+    await send("/api/financeiro/gestao/saldo-inicial", "PUT", event.currentTarget);
+    $("#actionDialog").close();
+    toast("Saldo inicial atualizado.");
+    await loadFinancialManagement(managementData?.periodo, managementData?.visao,
+      managementData?.data_inicio, managementData?.data_fim);
   };
 }
 
@@ -1859,6 +1883,7 @@ document.addEventListener("click", event => {
   }
   const managementAction = event.target.closest("[data-management-action]");
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
+  if (event.target.closest("[data-management-initial-balance]")) openManagementInitialBalance();
   const managementPayment = event.target.closest(".pay-management");
   if (managementPayment) openManagementPayment(managementPayment);
   const summary = event.target.closest("[data-summary]");
