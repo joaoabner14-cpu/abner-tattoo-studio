@@ -1445,13 +1445,23 @@ async function clientCrm(db, id, studioId, enabledModules) {
         WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
         WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
         FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago,
+      COALESCE((SELECT COUNT(*) FROM crediario cr
+        WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado'),0) total_parcelas,
+      COALESCE((SELECT COUNT(*) FROM crediario cr
+        WHERE cr.id_financeiro=f.id AND cr.status='Pago'),0) parcelas_pagas,
+      COALESCE((SELECT COUNT(*) FROM crediario cr
+        WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado'
+          AND cr.status<>'Pago'),0) parcelas_abertas,
+      COALESCE((SELECT COUNT(*) FROM crediario cr
+        WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado'
+          AND cr.status<>'Pago' AND cr.data_vencimento<?),0) parcelas_atrasadas,
       EXISTS(SELECT 1 FROM crm_fotos_tatuagens ft WHERE ft.id_os=os.id) tem_foto
     FROM ordem_servico os
     LEFT JOIN agendamentos a ON a.id=os.id_agendamento
     LEFT JOIN financeiro f ON f.id_os=os.id
     WHERE os.id_cliente=? AND os.id_estudio=?
     ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
-  `).bind(id, studioId).all();
+  `).bind(saoPauloDate(), id, studioId).all();
   const { results: payments } = await db.prepare(`
     SELECT fm.id,fm.id_crediario,fm.tipo,fm.valor,fm.forma_pagamento,fm.observacao,
       COALESCE(fm.data_pagamento,fm.data_movimento) data_evento,f.id_os
@@ -1602,6 +1612,12 @@ async function clientCrm(db, id, studioId, enabledModules) {
   if (client.data_nascimento?.slice(5, 7) === today.slice(5, 7))
     alerts.push("Cliente faz aniversário neste mês.");
   if (pending > 0) alerts.push(`Cliente possui ${moneyText(pending)} pendente.`);
+  const overdueCreditOrders = orders.filter(item => Number(item.parcelas_atrasadas || 0) > 0);
+  if (overdueCreditOrders.length) {
+    const totalOverdue = overdueCreditOrders.reduce((sum, item) =>
+      sum + Number(item.parcelas_atrasadas || 0), 0);
+    alerts.push(`Cliente possui ${totalOverdue} parcela(s) de crediário atrasada(s).`);
+  }
   if (future[0]?.data_hora.slice(0, 10) === saoPauloDate(1))
     alerts.push("Cliente possui agendamento para amanhã.");
   if (visits.some((visit, index) => {

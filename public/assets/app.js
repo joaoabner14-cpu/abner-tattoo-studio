@@ -1023,12 +1023,18 @@ async function loadClient(id) {
     const status = order.faltou ? "Falta" : order.status_agendamento === "Concluido"
       ? "Concluída" : order.status_agendamento === "Cancelado"
         ? "Cancelada" : order.status_agendamento || order.status_os;
+    const creditLabel = Number(order.total_parcelas || 0) > 0
+      ? `${order.parcelas_pagas || 0}/${order.total_parcelas}`
+      : "X";
+    const creditStatus = Number(order.parcelas_atrasadas || 0) > 0
+      ? `${creditLabel} · ${order.parcelas_atrasadas} atrasada(s)`
+      : creditLabel;
     return `<article class="card crm-tattoo-card">
       ${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy">` : `<div class="crm-photo-placeholder">Sem foto</div>`}
       <div class="crm-tattoo-content"><div class="card-head"><div><strong>OS #${order.id_os}</strong><small>${dateBr(order.data_hora || order.data_criacao)} · ${escapeHtml(status)}</small></div>
       ${order.id_agendamento && hasModule("agenda") ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
       <p>${escapeHtml(order.descricao || "Sem descrição.")}</p>
-      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span>${hasModule("financeiro") ? `<span>Valor<strong>${money(order.valor_final)}</strong></span>` : ""}<span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
+      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span>${hasModule("financeiro") ? `<span>Valor<strong>${money(order.valor_final)}</strong></span><span>Crediário<strong class="${Number(order.parcelas_atrasadas || 0) > 0 ? "danger-text" : ""}">${escapeHtml(creditStatus)}</strong></span>` : ""}<span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
       <button class="secondary edit-crm-order" data-id="${order.id_os}">Editar informações</button></div>
     </article>`;
   }).join("") || `<div class="card muted">Nenhuma tatuagem registrada.</div>`;
