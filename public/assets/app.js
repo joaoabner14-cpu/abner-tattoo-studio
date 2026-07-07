@@ -1040,7 +1040,7 @@ async function loadClient(id) {
       }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
     const statementLines = [...paidEntries, ...pendingEntries]
       .map(item => `- ${item.text}`).join("\n") || "- Nenhum lançamento registrado.";
-    return `Olá, ${client.nome}! Tudo bem?\n\nDemonstrativo da tatuagem\n${dateBr(statement.data)} - ${title}\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nLançamentos:\n${statementLines}`;
+    return `Demonstrativo da tatuagem\n${dateBr(statement.data)} - ${title}\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nLançamentos:\n${statementLines}`;
   };
   const orderStatementByOs = Object.fromEntries((crm.demonstrativos_os || [])
     .filter(statement => statement.id_os)
