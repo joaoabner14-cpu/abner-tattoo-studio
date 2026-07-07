@@ -1475,6 +1475,26 @@ async function clientCrm(db, id, studioId, enabledModules) {
       AND (a.id IS NULL OR a.status<>'Cancelado')
     ORDER BY cr.data_vencimento,cr.numero_parcela
   `).bind(id, studioId).all();
+  const { results: creditStatementInstallments } = await db.prepare(`
+    SELECT cr.id,cr.numero_parcela,cr.data_vencimento,cr.data_pagamento,
+      cr.valor_parcela,cr.status,
+      (SELECT COUNT(*) FROM crediario total
+        WHERE total.id_financeiro=cr.id_financeiro
+          AND total.status<>'Cancelado') total_parcelas,
+      f.id_os,a.id id_agendamento,
+      (SELECT fm.forma_pagamento FROM financeiro_movimentos fm
+        WHERE fm.id_crediario=cr.id AND fm.tipo='Pagamento'
+        ORDER BY COALESCE(fm.data_pagamento,fm.data_movimento) DESC,fm.id DESC
+        LIMIT 1) forma_pagamento
+    FROM crediario cr
+    JOIN financeiro f ON f.id=cr.id_financeiro
+    LEFT JOIN ordem_servico os ON os.id=f.id_os
+    LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+    WHERE f.id_cliente=? AND f.id_estudio=?
+      AND cr.status<>'Cancelado'
+      AND (a.id IS NULL OR a.status<>'Cancelado')
+    ORDER BY f.id_os DESC,cr.numero_parcela
+  `).bind(id, studioId).all();
   const { results: customEvents } = await db.prepare(`
     SELECT id,tipo,descricao,data_evento,id_os,id_agendamento
     FROM crm_eventos WHERE id_cliente=? AND id_estudio=? ORDER BY data_evento DESC
@@ -1490,11 +1510,27 @@ async function clientCrm(db, id, studioId, enabledModules) {
   if (!enabledModules.has("financeiro")) {
     payments.length = 0;
     installments.length = 0;
+    creditStatementInstallments.length = 0;
     for (const order of orders) {
       order.valor_final = null;
       order.pago = 0;
     }
   }
+  const creditStatements = Object.values(creditStatementInstallments.reduce((map, item) => {
+    const key = item.id_os || item.id_agendamento || item.id;
+    if (!map[key]) map[key] = {
+      id_os: item.id_os, id_agendamento: item.id_agendamento,
+      total_parcelas: item.total_parcelas, parcelas: []
+    };
+    map[key].parcelas.push(item);
+    return map;
+  }, {})).map(statement => ({
+    ...statement,
+    parcelas_pagas: statement.parcelas.filter(item => item.status === "Pago").length,
+    valor_pago: statement.parcelas
+      .filter(item => item.status === "Pago")
+      .reduce((sum, item) => sum + Number(item.valor_parcela || 0), 0)
+  }));
   const spent = payments.reduce((sum, item) =>
     sum + (["Pagamento", "Sinal"].includes(item.tipo) ? Number(item.valor)
       : item.tipo === "Estorno" ? -Number(item.valor) : 0), 0);
@@ -1575,7 +1611,7 @@ async function clientCrm(db, id, studioId, enabledModules) {
       ultimo_pagamento: payments.find(item => ["Pagamento", "Sinal"].includes(item.tipo))?.data_evento || null
     },
     ordens: orders, agendamentos: appointments, pagamentos: payments,
-    crediarios: installments,
+    crediarios: installments, demonstrativos_crediario: creditStatements,
     alertas: alerts, timeline
   });
 }

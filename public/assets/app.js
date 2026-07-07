@@ -20,6 +20,15 @@ const moneyNumber = value => {
   if (!clean) return 0;
   return Number(clean.includes(",") ? clean.replace(/\./g, "").replace(",", ".") : clean) || 0;
 };
+const whatsAppPhone = value => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  return digits.startsWith("55") ? digits : `55${digits}`;
+};
+const whatsAppUrl = (phone, message) => {
+  const target = whatsAppPhone(phone);
+  return target ? `https://wa.me/${target}?text=${encodeURIComponent(message)}` : "";
+};
 const dateBr = value => value ? value.slice(0, 10).split("-").reverse().join("/") : "";
 const todaySp = () => new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit"
@@ -1033,6 +1042,17 @@ async function loadClient(id) {
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
       <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
+  const creditStatements = (crm.demonstrativos_crediario || []).map(statement => {
+    const paid = statement.parcelas.filter(item => item.status === "Pago");
+    const lines = paid.length
+      ? paid.map(item => `- Parcela ${item.numero_parcela}/${item.total_parcelas}: paga em ${dateBr(item.data_pagamento)} via ${item.forma_pagamento || "não informado"} - ${money(item.valor_parcela)}`).join("\n")
+      : "Nenhuma parcela consta como paga até agora.";
+    const title = statement.id_os ? `OS #${statement.id_os}` : "Crediário";
+    const message = `Olá, ${client.nome}! Tudo bem?\n\nSegue o demonstrativo do crediário da ${title}.\n\nParcelas pagas: ${statement.parcelas_pagas}/${statement.total_parcelas}\n${lines}\n\nTotal pago: ${money(statement.valor_pago)}.`;
+    const link = whatsAppUrl(client.telefone, message);
+    return `<article class="card card-head credit-statement-card"><div><strong>${title}</strong><small>${statement.parcelas_pagas}/${statement.total_parcelas} parcelas pagas · ${money(statement.valor_pago)}</small></div>
+      ${link ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(link)}">Enviar WhatsApp</a>` : `<button class="secondary" type="button" disabled>Sem telefone</button>`}</article>`;
+  }).join("") || `<div class="card muted">Nenhum crediário criado para este cliente.</div>`;
   const appointments = crm.agendamentos.map(item => {
     const past = item.data_hora.slice(0, 10) < todaySp();
     const status = item.faltou ? "Falta" : item.status;
@@ -1070,7 +1090,7 @@ async function loadClient(id) {
     </form>
   </div>
   <div class="tab-pane" id="crm-tattoos">${tattooHistory}</div>
-  ${hasModule("financeiro") ? `<div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>` : ""}
+  ${hasModule("financeiro") ? `<div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Demonstrativo para WhatsApp</h2><div class="credit-statement-list">${creditStatements}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>` : ""}
   ${hasModule("agenda") ? `<div class="tab-pane" id="crm-appointments">${appointments}</div>` : ""}
   <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
   <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>
