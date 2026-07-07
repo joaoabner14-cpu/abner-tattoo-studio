@@ -1165,13 +1165,6 @@ async function financialManagement(db, request, url, studioId) {
       SELECT saldo_inicial_caixa,data_saldo_inicial_caixa
       FROM estudios WHERE id=?
     `).bind(studioId).first();
-    const allCash = await db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
-        COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
-      FROM caixa
-      WHERE id_estudio=? AND status='Ativo'
-    `).bind(studioId).first();
     const cash = await db.prepare(`
       SELECT
         COALESCE(SUM(CASE WHEN tipo='Entrada' THEN valor ELSE 0 END),0) entradas,
@@ -1291,7 +1284,7 @@ async function financialManagement(db, request, url, studioId) {
         saldo_inicial_caixa: Number(studioCash?.saldo_inicial_caixa || 0),
         data_saldo_inicial_caixa: studioCash?.data_saldo_inicial_caixa || null,
         saldo_caixa: Number(studioCash?.saldo_inicial_caixa || 0) +
-          Number(allCash.entradas || 0) - Number(allCash.saidas || 0),
+          Number(cash.entradas || 0) - Number(cash.saidas || 0),
         receber: manualReceivable.total +
           monthlyClientReceivables.reduce((sum, item) => sum + item.saldo, 0),
         pagar: payable.total,

@@ -200,7 +200,7 @@ async function loadFinancialManagement(
       <button class="card stat expense summary-card" data-summary="saidas"><span class="muted">Saídas</span><strong>${money(summary.saidas)}</strong></button>
       <button class="card stat summary-card ${summary.resultado < 0 ? "stat-late" : ""}" data-summary="resultado"><span class="muted">Resultado</span><strong>${money(summary.resultado)}</strong></button>
       <div class="card stat"><span class="muted">Saldo inicial</span><strong>${money(summary.saldo_inicial_caixa)}</strong><small>${summary.data_saldo_inicial_caixa ? `Desde ${dateBr(summary.data_saldo_inicial_caixa)}` : "Não configurado"}</small></div>
-      <div class="card stat ${summary.saldo_caixa < 0 ? "stat-late" : ""}"><span class="muted">Saldo em caixa</span><strong>${money(summary.saldo_caixa)}</strong><small>Inicial + caixa ativo</small></div>
+      <div class="card stat ${summary.saldo_caixa < 0 ? "stat-late" : ""}"><span class="muted">Saldo em caixa</span><strong>${money(summary.saldo_caixa)}</strong><small>Inicial + resultado da visão</small></div>
       <button class="card stat summary-card" data-summary="receber"><span class="muted">A receber</span><strong>${money(summary.receber)}</strong></button>
       <button class="card stat summary-card" data-summary="pagar"><span class="muted">A pagar</span><strong>${money(summary.pagar)}</strong></button>
       <button class="card stat stat-late summary-card" data-summary="atraso"><span class="muted">Em atraso</span><strong>${money(summary.atrasado)}</strong></button>
