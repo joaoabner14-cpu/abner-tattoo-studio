@@ -1453,7 +1453,7 @@ async function clientCrm(db, id, studioId, enabledModules) {
     ORDER BY COALESCE(a.data_hora,os.data_criacao) DESC
   `).bind(id, studioId).all();
   const { results: payments } = await db.prepare(`
-    SELECT fm.id,fm.tipo,fm.valor,fm.forma_pagamento,fm.observacao,
+    SELECT fm.id,fm.id_crediario,fm.tipo,fm.valor,fm.forma_pagamento,fm.observacao,
       COALESCE(fm.data_pagamento,fm.data_movimento) data_evento,f.id_os
     FROM financeiro_movimentos fm
     JOIN financeiro f ON f.id=fm.id_financeiro

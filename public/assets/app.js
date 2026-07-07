@@ -1044,13 +1044,26 @@ async function loadClient(id) {
   }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
   const orderStatements = (crm.demonstrativos_os || []).map(statement => {
     const title = statement.id_os ? `OS #${statement.id_os}` : "Ordem de serviço";
-    const paymentLines = statement.pagamentos.length
-      ? statement.pagamentos.map(item => `- ${item.tipo}: ${dateBr(item.data_evento)} · ${item.forma_pagamento || "forma não informada"} · ${money(item.valor)}`).join("\n")
-      : "- Nenhum recebimento registrado.";
-    const installmentLines = statement.parcelas.length
-      ? statement.parcelas.map(item => `- Parcela ${item.numero_parcela}/${item.total_parcelas}: ${item.status === "Pago" ? `paga em ${dateBr(item.data_pagamento)} via ${item.forma_pagamento || "forma não informada"}` : `${item.status} · vence ${dateBr(item.data_vencimento)}`} · ${money(item.valor_parcela)}`).join("\n")
-      : "- Nenhum crediário criado.";
-    const message = `Olá, ${client.nome}! Tudo bem?\n\nSegue o demonstrativo financeiro da ${title}.\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nRecebimentos:\n${paymentLines}\n\nCrediário:\nParcelas pagas: ${statement.parcelas_pagas}/${statement.total_parcelas}\n${installmentLines}`;
+    const installmentById = Object.fromEntries(statement.parcelas.map(item => [String(item.id), item]));
+    const paidEntries = statement.pagamentos.map(item => {
+      const installment = item.id_crediario ? installmentById[String(item.id_crediario)] : null;
+      return {
+        date: item.data_evento,
+        text: `${dateBr(item.data_evento)} - ${installment ? `Crediário parcela ${installment.numero_parcela}/${installment.total_parcelas}` : item.tipo} - ${item.forma_pagamento || "forma não informada"} - ${money(item.valor)}`
+      };
+    }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const pendingEntries = statement.parcelas
+      .filter(item => item.status !== "Pago")
+      .map(item => {
+        const overdue = item.data_vencimento < todaySp();
+        return {
+          date: item.data_vencimento,
+          text: `${dateBr(item.data_vencimento)} - Crediário parcela ${item.numero_parcela}/${item.total_parcelas} - ${overdue ? "Vencida" : "Pendente"} - ${money(item.valor_parcela)}`
+        };
+      }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const statementLines = [...paidEntries, ...pendingEntries]
+      .map(item => `- ${item.text}`).join("\n") || "- Nenhum lançamento registrado.";
+    const message = `Olá, ${client.nome}! Tudo bem?\n\nDemonstrativo da tatuagem\n${dateBr(statement.data)} - ${title}\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nLançamentos:\n${statementLines}`;
     const link = whatsAppUrl(client.telefone, message);
     return `<article class="card card-head credit-statement-card"><div><strong>${title}</strong><small>Recebido ${money(statement.recebido)} · saldo ${money(statement.saldo)}${statement.total_parcelas ? ` · ${statement.parcelas_pagas}/${statement.total_parcelas} parcelas pagas` : ""}</small></div>
       ${link ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(link)}">Enviar WhatsApp</a>` : `<button class="secondary" type="button" disabled>Sem telefone</button>`}</article>`;
