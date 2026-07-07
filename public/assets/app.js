@@ -1058,7 +1058,7 @@ async function loadClient(id) {
     const statement = orderStatementByOs[String(order.id_os)];
     const receiptLink = statement ? whatsAppUrl(client.telefone, buildOrderStatementMessage(statement)) : "";
     return `<article class="card crm-tattoo-card">
-      ${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy">` : `<div class="crm-photo-placeholder">Sem foto</div>`}
+      ${order.tem_foto ? `<button class="crm-tattoo-thumb open-photo-preview" type="button" data-src="/api/crm/tatuagem/${order.id_os}/foto" data-title="Foto da OS #${order.id_os}"><img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy"></button>` : `<div class="crm-photo-placeholder">Sem foto</div>`}
       <div class="crm-tattoo-content"><div class="card-head"><div><strong>OS #${order.id_os}</strong><small>${dateBr(order.data_hora || order.data_criacao)} · ${escapeHtml(status)}</small></div>
       ${order.id_agendamento && hasModule("agenda") ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
       <p>${escapeHtml(order.descricao || "Sem descrição.")}</p>
@@ -1775,6 +1775,12 @@ document.addEventListener("click", event => {
   if (serviceAction) openServiceAction(serviceAction.dataset.serviceAction);
   const crmOrder = event.target.closest(".edit-crm-order");
   if (crmOrder) openCrmOrderEdit(crmOrder.dataset.id);
+  const photoPreview = event.target.closest(".open-photo-preview");
+  if (photoPreview) {
+    $("#actionContent").innerHTML = `<header><h2>${escapeHtml(photoPreview.dataset.title || "Foto")}</h2><button class="close" type="button">×</button></header>
+      <div class="photo-preview-full"><img src="${escapeHtml(photoPreview.dataset.src)}" alt="${escapeHtml(photoPreview.dataset.title || "Foto")}"></div>`;
+    $("#actionDialog").showModal();
+  }
   const stockAction = event.target.closest("[data-stock-action]");
   if (stockAction) openStockAction(stockAction.dataset.stockAction, stockAction.dataset.id);
   const marketingAction = event.target.closest("[data-marketing-action]");
