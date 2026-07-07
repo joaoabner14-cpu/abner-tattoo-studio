@@ -1126,9 +1126,10 @@ async function loadClient(id) {
   </form>`).join("") || `<div class="card muted">Nenhuma solicitação LGPD registrada.</div>`;
   const privacyHistory = privacy.historico.map(item => `<div class="privacy-history-row"><strong>${escapeHtml(item.tipo)}</strong><small>${dateBr(item.data_evento)} · ${escapeHtml(item.usuario || "Sistema")}</small><p>${escapeHtml(item.descricao)}</p></div>`).join("") || `<div class="card muted">Nenhuma alteração registrada.</div>`;
   $("#clientDetail").classList.remove("empty");
+  const clientWhatsAppLink = whatsAppUrl(client.telefone, "");
   $("#clientDetail").innerHTML = `${alerts}<div class="crm-header">
     <label class="crm-client-photo">${client.tem_foto ? `<img src="/api/crm/cliente/${id}/foto?v=${Date.now()}" alt="Foto de ${escapeHtml(client.nome)}">` : `<span>👤</span>`}<input id="crmClientPhoto" type="file" accept="image/*" hidden></label>
-    <div><h2>${escapeHtml(client.nome)}</h2><p>${escapeHtml(client.telefone)}${client.instagram ? ` · ${escapeHtml(client.instagram)}` : ""}</p><span class="badge">${escapeHtml(client.status)}</span></div>
+    <div><h2>${escapeHtml(client.nome)}</h2><p>${clientWhatsAppLink ? `<a class="whatsapp-inline" target="_blank" rel="noopener" href="${escapeHtml(clientWhatsAppLink)}">${escapeHtml(client.telefone)}</a>` : escapeHtml(client.telefone || "Sem telefone")}${client.instagram ? ` · ${escapeHtml(client.instagram)}` : ""}</p><span class="badge">${escapeHtml(client.status)}</span></div>
   </div>
   <div class="tabs crm-tabs"><button class="tab active" data-tab="crm-summary">Resumo</button><button class="tab" data-tab="crm-tattoos">Tatuagens</button>${hasModule("financeiro") ? `<button class="tab" data-tab="crm-finance">Financeiro</button>` : ""}${hasModule("agenda") ? `<button class="tab" data-tab="crm-appointments">Agendamentos</button>` : ""}<button class="tab" data-tab="crm-notes">Observações</button><button class="tab" data-tab="crm-timeline">Timeline</button><button class="tab" data-tab="crm-privacy">Privacidade</button></div>
   <div class="tab-pane active" id="crm-summary">
