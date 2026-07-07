@@ -1019,36 +1019,7 @@ async function loadClient(id) {
   const metrics = crm.indicadores;
   const alerts = crm.alertas.map(message =>
     `<div class="crm-alert">${escapeHtml(message)}</div>`).join("");
-  const tattooHistory = crm.ordens.map(order => {
-    const status = order.faltou ? "Falta" : order.status_agendamento === "Concluido"
-      ? "Concluída" : order.status_agendamento === "Cancelado"
-        ? "Cancelada" : order.status_agendamento || order.status_os;
-    const creditLabel = Number(order.total_parcelas || 0) > 0
-      ? `${order.parcelas_pagas || 0}/${order.total_parcelas}`
-      : "X";
-    const creditStatus = Number(order.parcelas_atrasadas || 0) > 0
-      ? `${creditLabel} · ${order.parcelas_atrasadas} atrasada(s)`
-      : creditLabel;
-    return `<article class="card crm-tattoo-card">
-      ${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy">` : `<div class="crm-photo-placeholder">Sem foto</div>`}
-      <div class="crm-tattoo-content"><div class="card-head"><div><strong>OS #${order.id_os}</strong><small>${dateBr(order.data_hora || order.data_criacao)} · ${escapeHtml(status)}</small></div>
-      ${order.id_agendamento && hasModule("agenda") ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
-      <p>${escapeHtml(order.descricao || "Sem descrição.")}</p>
-      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span>${hasModule("financeiro") ? `<span>Valor<strong>${money(order.valor_final)}</strong></span><span>Crediário<strong class="${Number(order.parcelas_atrasadas || 0) > 0 ? "danger-text" : ""}">${escapeHtml(creditStatus)}</strong></span>` : ""}<span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
-      <button class="secondary edit-crm-order" data-id="${order.id_os}">Editar informações</button></div>
-    </article>`;
-  }).join("") || `<div class="card muted">Nenhuma tatuagem registrada.</div>`;
-  const paymentHistory = crm.pagamentos.map(item => `<div class="financial-movement">
-    <div><strong>${escapeHtml(item.tipo)}</strong><span class="muted">${dateBr(item.data_evento)} · OS #${item.id_os || "-"}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}</span></div>
-    <strong>${item.tipo === "Estorno" ? "- " : ""}${money(item.valor)}</strong></div>`).join("") || `<div class="card muted">Nenhum pagamento registrado.</div>`;
-  const openInstallments = crm.crediarios.map(item => {
-    const late = item.status === "Atrasado" || item.data_vencimento < todaySp();
-    return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
-      <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
-      <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
-      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button></div></div>`;
-  }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
-  const orderStatements = (crm.demonstrativos_os || []).map(statement => {
+  const buildOrderStatementMessage = statement => {
     const title = statement.id_os ? `OS #${statement.id_os}` : "Ordem de serviço";
     const installmentById = Object.fromEntries(statement.parcelas.map(item => [String(item.id), item]));
     const paidEntries = statement.pagamentos.map(item => {
@@ -1069,8 +1040,45 @@ async function loadClient(id) {
       }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
     const statementLines = [...paidEntries, ...pendingEntries]
       .map(item => `- ${item.text}`).join("\n") || "- Nenhum lançamento registrado.";
-    const message = `Olá, ${client.nome}! Tudo bem?\n\nDemonstrativo da tatuagem\n${dateBr(statement.data)} - ${title}\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nLançamentos:\n${statementLines}`;
-    const link = whatsAppUrl(client.telefone, message);
+    return `Olá, ${client.nome}! Tudo bem?\n\nDemonstrativo da tatuagem\n${dateBr(statement.data)} - ${title}\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nLançamentos:\n${statementLines}`;
+  };
+  const orderStatementByOs = Object.fromEntries((crm.demonstrativos_os || [])
+    .filter(statement => statement.id_os)
+    .map(statement => [String(statement.id_os), statement]));
+  const tattooHistory = crm.ordens.map(order => {
+    const status = order.faltou ? "Falta" : order.status_agendamento === "Concluido"
+      ? "Concluída" : order.status_agendamento === "Cancelado"
+        ? "Cancelada" : order.status_agendamento || order.status_os;
+    const creditLabel = Number(order.total_parcelas || 0) > 0
+      ? `${order.parcelas_pagas || 0}/${order.total_parcelas}`
+      : "X";
+    const creditStatus = Number(order.parcelas_atrasadas || 0) > 0
+      ? `${creditLabel} · ${order.parcelas_atrasadas} atrasada(s)`
+      : creditLabel;
+    const statement = orderStatementByOs[String(order.id_os)];
+    const receiptLink = statement ? whatsAppUrl(client.telefone, buildOrderStatementMessage(statement)) : "";
+    return `<article class="card crm-tattoo-card">
+      ${order.tem_foto ? `<img src="/api/crm/tatuagem/${order.id_os}/foto" alt="Foto da tatuagem" loading="lazy">` : `<div class="crm-photo-placeholder">Sem foto</div>`}
+      <div class="crm-tattoo-content"><div class="card-head"><div><strong>OS #${order.id_os}</strong><small>${dateBr(order.data_hora || order.data_criacao)} · ${escapeHtml(status)}</small></div>
+      ${order.id_agendamento && hasModule("agenda") ? `<button class="secondary open-order" data-id="${order.id_agendamento}">Abrir OS</button>` : ""}</div>
+      <p>${escapeHtml(order.descricao || "Sem descrição.")}</p>
+      <div class="crm-detail-grid"><span>Região<strong>${escapeHtml(order.regiao_corpo || "Não informada")}</strong></span>${hasModule("financeiro") ? `<span>Valor<strong>${money(order.valor_final)}</strong></span><span>Crediário<strong class="${Number(order.parcelas_atrasadas || 0) > 0 ? "danger-text" : ""}">${escapeHtml(creditStatus)}</strong></span>` : ""}<span>Duração<strong>${order.tempo_sessao_minutos ? `${order.tempo_sessao_minutos} min` : "Não informada"}</strong></span></div>
+      <div class="card-actions"><button class="secondary edit-crm-order" data-id="${order.id_os}">Editar informações</button>${hasModule("financeiro") ? receiptLink ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(receiptLink)}">Enviar recibo</a>` : `<button class="secondary" type="button" disabled>Sem telefone</button>` : ""}</div></div>
+    </article>`;
+  }).join("") || `<div class="card muted">Nenhuma tatuagem registrada.</div>`;
+  const paymentHistory = crm.pagamentos.map(item => `<div class="financial-movement">
+    <div><strong>${escapeHtml(item.tipo)}</strong><span class="muted">${dateBr(item.data_evento)} · OS #${item.id_os || "-"}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}</span></div>
+    <strong>${item.tipo === "Estorno" ? "- " : ""}${money(item.valor)}</strong></div>`).join("") || `<div class="card muted">Nenhum pagamento registrado.</div>`;
+  const openInstallments = crm.crediarios.map(item => {
+    const late = item.status === "Atrasado" || item.data_vencimento < todaySp();
+    return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
+      <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
+      <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
+      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button></div></div>`;
+  }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
+  const orderStatements = (crm.demonstrativos_os || []).map(statement => {
+    const title = statement.id_os ? `OS #${statement.id_os}` : "Ordem de serviço";
+    const link = whatsAppUrl(client.telefone, buildOrderStatementMessage(statement));
     return `<article class="card card-head credit-statement-card"><div><strong>${title}</strong><small>Recebido ${money(statement.recebido)} · saldo ${money(statement.saldo)}${statement.total_parcelas ? ` · ${statement.parcelas_pagas}/${statement.total_parcelas} parcelas pagas` : ""}</small></div>
       ${link ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(link)}">Enviar WhatsApp</a>` : `<button class="secondary" type="button" disabled>Sem telefone</button>`}</article>`;
   }).join("") || `<div class="card muted">Nenhuma ordem de serviço com financeiro para este cliente.</div>`;
