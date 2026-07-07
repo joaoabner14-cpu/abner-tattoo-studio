@@ -1516,21 +1516,46 @@ async function clientCrm(db, id, studioId, enabledModules) {
       order.pago = 0;
     }
   }
-  const creditStatements = Object.values(creditStatementInstallments.reduce((map, item) => {
+  const installmentsByOrder = creditStatementInstallments.reduce((map, item) => {
     const key = item.id_os || item.id_agendamento || item.id;
-    if (!map[key]) map[key] = {
-      id_os: item.id_os, id_agendamento: item.id_agendamento,
-      total_parcelas: item.total_parcelas, parcelas: []
-    };
-    map[key].parcelas.push(item);
+    if (!map[key]) map[key] = [];
+    map[key].push(item);
     return map;
-  }, {})).map(statement => ({
-    ...statement,
-    parcelas_pagas: statement.parcelas.filter(item => item.status === "Pago").length,
-    valor_pago: statement.parcelas
-      .filter(item => item.status === "Pago")
-      .reduce((sum, item) => sum + Number(item.valor_parcela || 0), 0)
-  }));
+  }, {});
+  const paymentsByOrder = payments.reduce((map, item) => {
+    const key = item.id_os || "sem-os";
+    if (!map[key]) map[key] = [];
+    map[key].push(item);
+    return map;
+  }, {});
+  const orderStatements = orders
+    .filter(order => order.valor_final != null || paymentsByOrder[order.id_os] || installmentsByOrder[order.id_os])
+    .map(order => {
+      const orderPayments = paymentsByOrder[order.id_os] || [];
+      const orderInstallments = installmentsByOrder[order.id_os] || [];
+      const paid = orderPayments.reduce((sum, item) =>
+        sum + (["Pagamento", "Sinal"].includes(item.tipo) ? Number(item.valor || 0)
+          : item.tipo === "Estorno" ? -Number(item.valor || 0) : 0), 0);
+      const installmentPaid = orderInstallments
+        .filter(item => item.status === "Pago")
+        .reduce((sum, item) => sum + Number(item.valor_parcela || 0), 0);
+      const installmentPending = orderInstallments
+        .filter(item => item.status !== "Pago")
+        .reduce((sum, item) => sum + Number(item.valor_parcela || 0), 0);
+      return {
+        id_os: order.id_os, id_agendamento: order.id_agendamento,
+        data: order.data_hora || order.data_criacao,
+        descricao: order.descricao, valor_final: order.valor_final,
+        recebido: paid,
+        saldo: Math.max(0, Number(order.valor_final || 0) - paid),
+        pagamentos: orderPayments,
+        parcelas: orderInstallments,
+        parcelas_pagas: orderInstallments.filter(item => item.status === "Pago").length,
+        total_parcelas: orderInstallments[0]?.total_parcelas || 0,
+        valor_parcelas_pago: installmentPaid,
+        valor_parcelas_pendente: installmentPending
+      };
+    });
   const spent = payments.reduce((sum, item) =>
     sum + (["Pagamento", "Sinal"].includes(item.tipo) ? Number(item.valor)
       : item.tipo === "Estorno" ? -Number(item.valor) : 0), 0);
@@ -1611,7 +1636,7 @@ async function clientCrm(db, id, studioId, enabledModules) {
       ultimo_pagamento: payments.find(item => ["Pagamento", "Sinal"].includes(item.tipo))?.data_evento || null
     },
     ordens: orders, agendamentos: appointments, pagamentos: payments,
-    crediarios: installments, demonstrativos_crediario: creditStatements,
+    crediarios: installments, demonstrativos_os: orderStatements,
     alertas: alerts, timeline
   });
 }

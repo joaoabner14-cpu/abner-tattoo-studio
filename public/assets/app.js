@@ -1042,17 +1042,19 @@ async function loadClient(id) {
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
       <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
-  const creditStatements = (crm.demonstrativos_crediario || []).map(statement => {
-    const paid = statement.parcelas.filter(item => item.status === "Pago");
-    const lines = paid.length
-      ? paid.map(item => `- Parcela ${item.numero_parcela}/${item.total_parcelas}: paga em ${dateBr(item.data_pagamento)} via ${item.forma_pagamento || "não informado"} - ${money(item.valor_parcela)}`).join("\n")
-      : "Nenhuma parcela consta como paga até agora.";
-    const title = statement.id_os ? `OS #${statement.id_os}` : "Crediário";
-    const message = `Olá, ${client.nome}! Tudo bem?\n\nSegue o demonstrativo do crediário da ${title}.\n\nParcelas pagas: ${statement.parcelas_pagas}/${statement.total_parcelas}\n${lines}\n\nTotal pago: ${money(statement.valor_pago)}.`;
+  const orderStatements = (crm.demonstrativos_os || []).map(statement => {
+    const title = statement.id_os ? `OS #${statement.id_os}` : "Ordem de serviço";
+    const paymentLines = statement.pagamentos.length
+      ? statement.pagamentos.map(item => `- ${item.tipo}: ${dateBr(item.data_evento)} · ${item.forma_pagamento || "forma não informada"} · ${money(item.valor)}`).join("\n")
+      : "- Nenhum recebimento registrado.";
+    const installmentLines = statement.parcelas.length
+      ? statement.parcelas.map(item => `- Parcela ${item.numero_parcela}/${item.total_parcelas}: ${item.status === "Pago" ? `paga em ${dateBr(item.data_pagamento)} via ${item.forma_pagamento || "forma não informada"}` : `${item.status} · vence ${dateBr(item.data_vencimento)}`} · ${money(item.valor_parcela)}`).join("\n")
+      : "- Nenhum crediário criado.";
+    const message = `Olá, ${client.nome}! Tudo bem?\n\nSegue o demonstrativo financeiro da ${title}.\n\nValor da OS: ${money(statement.valor_final)}\nTotal recebido: ${money(statement.recebido)}\nSaldo em aberto: ${money(statement.saldo)}\n\nRecebimentos:\n${paymentLines}\n\nCrediário:\nParcelas pagas: ${statement.parcelas_pagas}/${statement.total_parcelas}\n${installmentLines}`;
     const link = whatsAppUrl(client.telefone, message);
-    return `<article class="card card-head credit-statement-card"><div><strong>${title}</strong><small>${statement.parcelas_pagas}/${statement.total_parcelas} parcelas pagas · ${money(statement.valor_pago)}</small></div>
+    return `<article class="card card-head credit-statement-card"><div><strong>${title}</strong><small>Recebido ${money(statement.recebido)} · saldo ${money(statement.saldo)}${statement.total_parcelas ? ` · ${statement.parcelas_pagas}/${statement.total_parcelas} parcelas pagas` : ""}</small></div>
       ${link ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(link)}">Enviar WhatsApp</a>` : `<button class="secondary" type="button" disabled>Sem telefone</button>`}</article>`;
-  }).join("") || `<div class="card muted">Nenhum crediário criado para este cliente.</div>`;
+  }).join("") || `<div class="card muted">Nenhuma ordem de serviço com financeiro para este cliente.</div>`;
   const appointments = crm.agendamentos.map(item => {
     const past = item.data_hora.slice(0, 10) < todaySp();
     const status = item.faltou ? "Falta" : item.status;
@@ -1090,7 +1092,7 @@ async function loadClient(id) {
     </form>
   </div>
   <div class="tab-pane" id="crm-tattoos">${tattooHistory}</div>
-  ${hasModule("financeiro") ? `<div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Demonstrativo para WhatsApp</h2><div class="credit-statement-list">${creditStatements}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>` : ""}
+  ${hasModule("financeiro") ? `<div class="tab-pane" id="crm-finance"><div class="stats crm-stats"><div class="card stat"><span>Total gasto</span><strong>${money(metrics.total_gasto)}</strong></div><div class="card stat"><span>Ticket médio</span><strong>${money(metrics.ticket_medio)}</strong></div><div class="card stat stat-late"><span>Pendente</span><strong>${money(metrics.pendente)}</strong></div><div class="card stat"><span>Último pagamento</span><strong>${dateBr(metrics.ultimo_pagamento) || "—"}</strong></div></div><h2>Parcelas em aberto</h2><div class="installment-list">${openInstallments}</div><h2>Demonstrativo da OS para WhatsApp</h2><div class="credit-statement-list">${orderStatements}</div><h2>Pagamentos</h2><div class="movement-list">${paymentHistory}</div></div>` : ""}
   ${hasModule("agenda") ? `<div class="tab-pane" id="crm-appointments">${appointments}</div>` : ""}
   <div class="tab-pane" id="crm-notes"><form id="crmNotesForm"><label>Anotações do cliente<textarea name="observacoes" placeholder="Preferências, estilo favorito, cuidados especiais...">${escapeHtml(client.observacoes)}</textarea></label><button class="primary">Salvar observações</button></form></div>
   <div class="tab-pane" id="crm-timeline"><div class="crm-timeline">${timeline}</div></div>
