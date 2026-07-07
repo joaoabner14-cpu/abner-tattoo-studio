@@ -714,13 +714,14 @@ async function stock(db, request, url, studioId) {
     const summary = await db.prepare(`
       SELECT COUNT(*) itens,
         COALESCE(SUM(CASE WHEN quantidade_atual<=quantidade_minima THEN 1 ELSE 0 END),0) baixos,
-        COALESCE(SUM(quantidade_atual*valor_unitario),0) valor_total
+        COALESCE(SUM(quantidade_atual*COALESCE(NULLIF(valor_custo_unitario,0),valor_unitario,0)),0) valor_total
       FROM estoque WHERE ativo=1 AND id_estudio=?
     `).bind(studioId).first();
     const { results: items } = await db.prepare(`
       SELECT id,nome,categoria,marca,unidade,quantidade_atual,quantidade_minima,
         valor_unitario,observacoes,tipo_item,cor,volume_embalagem_ml,ml_por_gota,
-        lote,data_validade,validade_apos_aberto_dias,data_abertura,alerta_validade_dias
+        lote,data_validade,validade_apos_aberto_dias,data_abertura,alerta_validade_dias,
+        valor_compra_embalagem,valor_custo_unitario,margem_venda_percentual,valor_venda_unitario
       FROM estoque WHERE ativo=1 AND id_estudio=? AND (nome LIKE ? COLLATE NOCASE
         OR categoria LIKE ? COLLATE NOCASE OR marca LIKE ? COLLATE NOCASE
         OR cor LIKE ? COLLATE NOCASE OR lote LIKE ? COLLATE NOCASE)
@@ -744,7 +745,8 @@ async function stock(db, request, url, studioId) {
     summary.vencidos = alerts.filter(item => item.status_validade === "Vencida").length;
     const { results: history } = await db.prepare(`
       SELECT em.id,em.tipo,em.quantidade,em.saldo_anterior,em.saldo_atual,
-        em.valor_unitario,em.observacao,em.id_os,em.data_movimento,e.nome,e.unidade
+        em.valor_unitario,em.valor_total_pago,em.valor_venda_unitario,em.observacao,
+        em.id_os,em.data_movimento,e.nome,e.unidade
       FROM estoque_movimentos em JOIN estoque e ON e.id=em.id_estoque
       WHERE e.id_estudio=?
       ORDER BY em.data_movimento DESC,em.id DESC LIMIT 100
@@ -764,28 +766,39 @@ async function stock(db, request, url, studioId) {
       ? "Já existe esta tinta com o mesmo número de lote."
       : "Já existe um material com este nome.");
     const quantity = number(data.quantidade_atual);
-    const value = number(data.valor_unitario);
+    const volume = number(data.volume_embalagem_ml);
+    const purchaseValue = number(data.valor_compra_embalagem);
+    const baseUnitValue = number(data.valor_unitario);
+    const margin = Math.max(0, number(data.margem_venda_percentual));
+    const costUnitValue = isInk && volume > 0 && purchaseValue > 0
+      ? Math.round((purchaseValue / volume) * 10000) / 10000
+      : baseUnitValue;
+    const saleUnitValue = number(data.valor_venda_unitario) > 0
+      ? number(data.valor_venda_unitario)
+      : Math.round((costUnitValue * (1 + margin / 100)) * 10000) / 10000;
     const created = await db.prepare(`
       INSERT INTO estoque(id_estudio,nome,categoria,marca,unidade,quantidade_atual,
         quantidade_minima,valor_unitario,observacoes,ativo,tipo_item,cor,
         volume_embalagem_ml,ml_por_gota,lote,data_validade,
-        validade_apos_aberto_dias,data_abertura,alerta_validade_dias)
-      VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)
+        validade_apos_aberto_dias,data_abertura,alerta_validade_dias,
+        valor_compra_embalagem,valor_custo_unitario,margem_venda_percentual,valor_venda_unitario)
+      VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(studioId, name, data.categoria || "", data.marca || "", data.unidade || "un.",
-      quantity, number(data.quantidade_minima), value, data.observacoes || "",
+      quantity, number(data.quantidade_minima), costUnitValue, data.observacoes || "",
       isInk ? "Tinta" : "Material", isInk ? data.cor || "" : "",
-      isInk ? number(data.volume_embalagem_ml) || null : null,
+      isInk ? volume || null : null,
       isInk ? number(data.ml_por_gota) || 0.05 : 0.05,
       isInk ? data.lote || "" : "", isInk ? data.data_validade || null : null,
       isInk ? integer(data.validade_apos_aberto_dias) || null : null,
       isInk ? data.data_abertura || null : null,
-      isInk ? integer(data.alerta_validade_dias) || 30 : 30).run();
+      isInk ? integer(data.alerta_validade_dias) || 30 : 30,
+      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue).run();
     if (quantity > 0) {
       await db.prepare(`
         INSERT INTO estoque_movimentos
-          (id_estoque,tipo,quantidade,saldo_anterior,saldo_atual,valor_unitario,observacao)
-        VALUES(?,'Entrada',?,0,?,?,?)
-      `).bind(created.meta.last_row_id, quantity, quantity, value, "Estoque inicial").run();
+          (id_estoque,tipo,quantidade,saldo_anterior,saldo_atual,valor_unitario,valor_total_pago,valor_venda_unitario,observacao)
+        VALUES(?,'Entrada',?,0,?,?,?,?,?)
+      `).bind(created.meta.last_row_id, quantity, quantity, costUnitValue, isInk ? purchaseValue : 0, saleUnitValue, "Estoque inicial").run();
     }
     return json({ ok: true, id: created.meta.last_row_id }, 201);
   }
@@ -796,21 +809,34 @@ async function stock(db, request, url, studioId) {
   if (request.method === "PUT" && url.pathname === `/api/estoque/${itemId}`) {
     const data = await body(request);
     const isInk = data.tipo_item === "Tinta";
+    const volume = number(data.volume_embalagem_ml);
+    const purchaseValue = number(data.valor_compra_embalagem);
+    const margin = Math.max(0, number(data.margem_venda_percentual));
+    const baseUnitValue = number(data.valor_unitario);
+    const costUnitValue = isInk && volume > 0 && purchaseValue > 0
+      ? Math.round((purchaseValue / volume) * 10000) / 10000
+      : baseUnitValue;
+    const saleUnitValue = number(data.valor_venda_unitario) > 0
+      ? number(data.valor_venda_unitario)
+      : Math.round((costUnitValue * (1 + margin / 100)) * 10000) / 10000;
     await db.prepare(`
       UPDATE estoque SET nome=?,categoria=?,marca=?,unidade=?,
         quantidade_minima=?,valor_unitario=?,observacoes=?,tipo_item=?,cor=?,
         volume_embalagem_ml=?,ml_por_gota=?,lote=?,data_validade=?,
-        validade_apos_aberto_dias=?,data_abertura=?,alerta_validade_dias=? WHERE id=?
+        validade_apos_aberto_dias=?,data_abertura=?,alerta_validade_dias=?,
+        valor_compra_embalagem=?,valor_custo_unitario=?,margem_venda_percentual=?,
+        valor_venda_unitario=? WHERE id=?
     `).bind(required(data.nome, "nome"), data.categoria || "", data.marca || "",
       data.unidade || "un.", number(data.quantidade_minima),
-      number(data.valor_unitario), data.observacoes || "",
+      costUnitValue, data.observacoes || "",
       isInk ? "Tinta" : "Material", isInk ? data.cor || "" : "",
-      isInk ? number(data.volume_embalagem_ml) || null : null,
+      isInk ? volume || null : null,
       isInk ? number(data.ml_por_gota) || 0.05 : 0.05,
       isInk ? data.lote || "" : "", isInk ? data.data_validade || null : null,
       isInk ? integer(data.validade_apos_aberto_dias) || null : null,
       isInk ? data.data_abertura || null : null,
-      isInk ? integer(data.alerta_validade_dias) || 30 : 30, itemId).run();
+      isInk ? integer(data.alerta_validade_dias) || 30 : 30,
+      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue, itemId).run();
     return json({ ok: true });
   }
   if (request.method === "POST" && url.pathname === `/api/estoque/${itemId}/movimentos`) {
@@ -822,16 +848,30 @@ async function stock(db, request, url, studioId) {
     const previous = number(item.quantidade_atual);
     const current = type === "Entrada" ? previous + quantity : previous - quantity;
     if (current < 0) return error(`Estoque insuficiente. Saldo atual: ${previous} ${item.unidade}.`);
+    const totalPaid = number(data.valor_total_pago);
     const value = number(data.valor_unitario);
-    const finalValue = type === "Entrada" && value > 0 ? value : item.valor_unitario;
+    const finalValue = type === "Entrada" && totalPaid > 0 && quantity > 0
+      ? Math.round((totalPaid / quantity) * 10000) / 10000
+      : type === "Entrada" && value > 0 ? value
+      : number(item.valor_custo_unitario || item.valor_unitario);
+    const margin = data.margem_venda_percentual === undefined
+      ? number(item.margem_venda_percentual)
+      : Math.max(0, number(data.margem_venda_percentual));
+    const saleUnitValue = type === "Entrada"
+      ? Math.round((finalValue * (1 + margin / 100)) * 10000) / 10000
+      : number(item.valor_venda_unitario || item.valor_unitario);
     await db.batch([
-      db.prepare("UPDATE estoque SET quantidade_atual=?,valor_unitario=? WHERE id=?")
-        .bind(current, finalValue, itemId),
+      db.prepare(`UPDATE estoque SET quantidade_atual=?,valor_unitario=?,
+        valor_custo_unitario=?,valor_compra_embalagem=?,
+        margem_venda_percentual=?,valor_venda_unitario=? WHERE id=?`)
+        .bind(current, finalValue, finalValue,
+          type === "Entrada" && totalPaid > 0 ? totalPaid : number(item.valor_compra_embalagem),
+          margin, saleUnitValue, itemId),
       db.prepare(`
         INSERT INTO estoque_movimentos
-          (id_estoque,tipo,quantidade,saldo_anterior,saldo_atual,valor_unitario,observacao)
-        VALUES(?,?,?,?,?,?,?)
-      `).bind(itemId, type, quantity, previous, current, finalValue, data.observacao || "")
+          (id_estoque,tipo,quantidade,saldo_anterior,saldo_atual,valor_unitario,valor_total_pago,valor_venda_unitario,observacao)
+        VALUES(?,?,?,?,?,?,?,?,?)
+      `).bind(itemId, type, quantity, previous, current, finalValue, totalPaid, saleUnitValue, data.observacao || "")
     ]);
     return json({ ok: true }, 201);
   }
