@@ -381,11 +381,11 @@ async function loadStock() {
   const items = stockData.itens.map(item => {
     const low = Number(item.quantidade_atual) <= Number(item.quantidade_minima);
     const expiryAlert = item.status_validade === "Vencida" || item.status_validade === "Próxima do vencimento";
-    const search = `${item.nome} ${item.tipo_material || ""} ${item.categoria || ""} ${item.marca || ""} ${item.cor || ""} ${item.lote || ""}`.toLocaleLowerCase("pt-BR");
+    const search = `${item.nome} ${item.categoria || ""} ${item.marca || ""} ${item.cor || ""} ${item.lote || ""}`.toLocaleLowerCase("pt-BR");
     return `<article class="card stock-card ${low ? "stock-low" : ""}" data-stock-search="${escapeHtml(search)}">
       <div class="stock-card-head"><div><strong>${escapeHtml(item.nome)}${item.cor ? ` · ${escapeHtml(item.cor)}` : ""}</strong><span class="badge ${low || expiryAlert ? "badge-late" : ""}">${expiryAlert ? item.status_validade : low ? "Estoque baixo" : item.tipo_item}</span></div>
       <strong class="stock-balance">${item.quantidade_atual} ${escapeHtml(item.unidade)}</strong></div>
-      <div class="muted">${item.tipo_material ? `${escapeHtml(item.tipo_material)} · ` : ""}${escapeHtml(item.categoria || "Sem categoria")}${item.marca ? ` · ${escapeHtml(item.marca)}` : ""}${item.tipo_item === "Tinta" && item.volume_embalagem_ml ? ` · Frasco ${item.volume_embalagem_ml} ml` : ""}${item.lote ? ` · Lote ${escapeHtml(item.lote)}` : ""}${item.validade_efetiva ? ` · validade ${dateBr(item.validade_efetiva)}` : ""}</div>
+      <div class="muted">${escapeHtml(item.categoria || "Sem categoria")}${item.marca ? ` · ${escapeHtml(item.marca)}` : ""}${item.tipo_item === "Tinta" && item.volume_embalagem_ml ? ` · Frasco ${item.volume_embalagem_ml} ml` : ""}${item.lote ? ` · Lote ${escapeHtml(item.lote)}` : ""}${item.validade_efetiva ? ` · validade ${dateBr(item.validade_efetiva)}` : ""}</div>
       <div class="stock-details"><span>Mínimo: ${item.quantidade_minima} ${escapeHtml(item.unidade)}</span><span>${item.tipo_item === "Tinta" ? `Custo ${money(item.valor_custo_unitario || item.valor_unitario)} / ml${item.valor_venda_unitario ? ` · venda ${money(item.valor_venda_unitario)} / ml` : ""}` : `${money(item.valor_unitario)} / ${escapeHtml(item.unidade)}`}</span></div>
       <div class="card-actions"><button class="secondary" type="button" data-stock-action="edit" data-id="${item.id}">Editar</button>
       <button class="primary" type="button" data-stock-action="movement" data-id="${item.id}">Movimentar</button></div>
@@ -857,8 +857,7 @@ function openStockAction(action, itemId = "") {
   const catalog = stockData?.catalogos || {};
   const catalogOptions = values => (values || [])
     .map(value => `<option value="${escapeHtml(value)}"></option>`).join("");
-  const catalogLists = `<datalist id="stockTypeOptions">${catalogOptions(catalog.tipos)}</datalist>
-    <datalist id="stockCategoryOptions">${catalogOptions(catalog.categorias)}</datalist>
+  const catalogLists = `<datalist id="stockCategoryOptions">${catalogOptions(catalog.categorias)}</datalist>
     <datalist id="stockBrandOptions">${catalogOptions(catalog.marcas)}</datalist>`;
   let title;
   let form;
@@ -866,7 +865,7 @@ function openStockAction(action, itemId = "") {
     title = "Novo material";
     form = `<form id="stockActionForm"><label>Nome<input name="nome" required></label>
       <label>Controle do item<select name="tipo_item"><option>Material</option><option>Tinta</option></select></label>
-      <div class="fields"><label>Tipo do material<input name="tipo_material" list="stockTypeOptions" placeholder="Ex.: Tinta, Transfer, Cartucho"></label><label>Categoria<input name="categoria" list="stockCategoryOptions" placeholder="Ex.: Tintas"></label></div>
+      <label>Categoria<input name="categoria" list="stockCategoryOptions" placeholder="Ex.: Tintas, Transfer, Cartucho"></label>
       <label>Marca<input name="marca" list="stockBrandOptions"></label>
       <div class="ink-only-fields" hidden><div class="fields"><label>Cor da tinta<input name="cor" placeholder="Ex.: Azul turquesa"></label><label>Número do lote<input name="lote"></label></div>
       <label>Validade do fabricante<input name="data_validade" type="date"></label>
@@ -884,7 +883,7 @@ function openStockAction(action, itemId = "") {
     title = "Editar material";
     form = `<form id="stockActionForm"><label>Nome<input name="nome" value="${escapeHtml(item.nome)}" required></label>
       <label>Controle do item<select name="tipo_item"><option ${item.tipo_item === "Material" ? "selected" : ""}>Material</option><option ${item.tipo_item === "Tinta" ? "selected" : ""}>Tinta</option></select></label>
-      <div class="fields"><label>Tipo do material<input name="tipo_material" list="stockTypeOptions" value="${escapeHtml(item.tipo_material || "")}"></label><label>Categoria<input name="categoria" list="stockCategoryOptions" value="${escapeHtml(item.categoria)}"></label></div>
+      <label>Categoria<input name="categoria" list="stockCategoryOptions" value="${escapeHtml(item.categoria)}"></label>
       <label>Marca<input name="marca" list="stockBrandOptions" value="${escapeHtml(item.marca)}"></label>
       <div class="ink-only-fields" ${item.tipo_item === "Tinta" ? "" : "hidden"}><div class="fields"><label>Cor da tinta<input name="cor" value="${escapeHtml(item.cor)}"></label><label>Número do lote<input name="lote" value="${escapeHtml(item.lote)}"></label></div>
       <label>Validade do fabricante<input name="data_validade" type="date" value="${item.data_validade || ""}"></label>
@@ -936,9 +935,6 @@ function openStockAction(action, itemId = "") {
       if (isInk && unitField) unitField.value = "ml";
       if (isInk && !$("#stockActionForm").elements.categoria.value) {
         $("#stockActionForm").elements.categoria.value = "Tintas";
-      }
-      if (isInk && !$("#stockActionForm").elements.tipo_material.value) {
-        $("#stockActionForm").elements.tipo_material.value = "Tinta";
       }
       updateInkCostPreview();
     };
