@@ -793,7 +793,7 @@ async function stock(db, request, url, studioId) {
     const purchaseValue = number(data.valor_compra_embalagem);
     const baseUnitValue = number(data.valor_unitario);
     const margin = Math.max(0, number(data.margem_venda_percentual));
-    const costUnitValue = isInk && volume > 0 && purchaseValue > 0
+    const costUnitValue = volume > 0 && purchaseValue > 0
       ? Math.round((purchaseValue / volume) * 10000) / 10000
       : baseUnitValue;
     const saleUnitValue = number(data.valor_venda_unitario) > 0
@@ -810,13 +810,13 @@ async function stock(db, request, url, studioId) {
     `).bind(studioId, name, data.categoria || "", data.marca || "", data.unidade || "un.",
       quantity, number(data.quantidade_minima), costUnitValue, data.observacoes || "",
       isInk ? "Tinta" : "Material", isInk ? data.cor || "" : "",
-      isInk ? volume || null : null,
+      volume || null,
       isInk ? number(data.ml_por_gota) || 0.05 : 0.05,
       isInk ? data.lote || "" : "", isInk ? data.data_validade || null : null,
       isInk ? integer(data.validade_apos_aberto_dias) || null : null,
       isInk ? data.data_abertura || null : null,
       isInk ? integer(data.alerta_validade_dias) || 30 : 30,
-      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue,
+      purchaseValue, costUnitValue, margin, saleUnitValue,
       data.tipo_material || (isInk ? "Tinta" : "")).run();
     await saveStockCatalogs({
       tipo_material: data.tipo_material || (isInk ? "Tinta" : ""),
@@ -843,7 +843,7 @@ async function stock(db, request, url, studioId) {
     const purchaseValue = number(data.valor_compra_embalagem);
     const margin = Math.max(0, number(data.margem_venda_percentual));
     const baseUnitValue = number(data.valor_unitario);
-    const costUnitValue = isInk && volume > 0 && purchaseValue > 0
+    const costUnitValue = volume > 0 && purchaseValue > 0
       ? Math.round((purchaseValue / volume) * 10000) / 10000
       : baseUnitValue;
     const saleUnitValue = number(data.valor_venda_unitario) > 0
@@ -860,13 +860,13 @@ async function stock(db, request, url, studioId) {
       data.unidade || "un.", number(data.quantidade_minima),
       costUnitValue, data.observacoes || "",
       isInk ? "Tinta" : "Material", isInk ? data.cor || "" : "",
-      isInk ? volume || null : null,
+      volume || null,
       isInk ? number(data.ml_por_gota) || 0.05 : 0.05,
       isInk ? data.lote || "" : "", isInk ? data.data_validade || null : null,
       isInk ? integer(data.validade_apos_aberto_dias) || null : null,
       isInk ? data.data_abertura || null : null,
       isInk ? integer(data.alerta_validade_dias) || 30 : 30,
-      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue,
+      purchaseValue, costUnitValue, margin, saleUnitValue,
       data.tipo_material || (isInk ? "Tinta" : ""), itemId).run();
     await saveStockCatalogs({
       tipo_material: data.tipo_material || (isInk ? "Tinta" : ""),

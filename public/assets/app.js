@@ -869,14 +869,14 @@ function openStockAction(action, itemId = "") {
       <div class="fields"><label>Tipo do material<input name="tipo_material" list="stockTypeOptions" placeholder="Ex.: Tinta, Transfer, Cartucho"></label><label>Categoria<input name="categoria" list="stockCategoryOptions" placeholder="Ex.: Tintas"></label></div>
       <label>Marca<input name="marca" list="stockBrandOptions"></label>
       <div class="ink-only-fields" hidden><div class="fields"><label>Cor da tinta<input name="cor" placeholder="Ex.: Azul turquesa"></label><label>Número do lote<input name="lote"></label></div>
-      <div class="fields"><label>Volume da embalagem (ml)<input name="volume_embalagem_ml" type="number" min="0" step=".01" inputmode="decimal"></label><label>Validade do fabricante<input name="data_validade" type="date"></label></div>
+      <label>Validade do fabricante<input name="data_validade" type="date"></label>
       <div class="fields"><label>Validade após aberto (dias)<input name="validade_apos_aberto_dias" type="number" min="1" step="1" inputmode="numeric"></label><label>Data de abertura<input name="data_abertura" type="date"></label></div>
       <label>Alertar com antecedência de<input name="alerta_validade_dias" type="number" min="1" step="1" inputmode="numeric" value="30"><small class="muted">Quantidade de dias antes do vencimento.</small></label>
-      <label>Estimativa de ml por gota<input name="ml_por_gota" type="number" min=".0001" step=".0001" inputmode="decimal" value="0.05"><small class="muted">Ajustável conforme o bico e a viscosidade da tinta.</small></label>
-      <div class="fields"><label>Valor pago no pote<input name="valor_compra_embalagem" data-money inputmode="numeric"></label><label>Margem para venda (%)<input name="margem_venda_percentual" type="number" min="0" step=".01" inputmode="decimal" value="0"></label></div>
-      <input type="hidden" name="valor_venda_unitario"><div class="card stock-cost-preview muted" data-stock-cost-preview>Informe o volume e o valor pago para calcular o custo por ml.</div></div>
+      <label>Estimativa de ml por gota<input name="ml_por_gota" type="number" min=".0001" step=".0001" inputmode="decimal" value="0.05"><small class="muted">Ajustável conforme o bico e a viscosidade da tinta.</small></label></div>
       <div class="fields"><label>Unidade<select name="unidade" data-stock-unit><option>un.</option><option>ml</option><option>g</option><option>caixa</option><option>rolo</option><option>folha</option></select></label>
       <label>Quantidade inicial<input name="quantidade_atual" type="number" min="0" step=".01" inputmode="decimal" value="0"></label></div>
+      <div class="fields"><label>Volume/quantidade da embalagem<input name="volume_embalagem_ml" type="number" min="0" step=".01" inputmode="decimal"><small class="muted">Ex.: frasco de 240 ml ou caixa com 20 unidades.</small></label><label>Valor pago na embalagem<input name="valor_compra_embalagem" data-money inputmode="numeric"></label></div>
+      <div class="fields"><label>Margem para venda (%)<input name="margem_venda_percentual" type="number" min="0" step=".01" inputmode="decimal" value="0"></label><div class="card stock-cost-preview muted" data-stock-cost-preview>Informe a quantidade da embalagem e o valor pago para calcular o custo unitário.</div></div><input type="hidden" name="valor_venda_unitario">
       <div class="fields"><label>Estoque mínimo<input name="quantidade_minima" type="number" min="0" step=".01" inputmode="decimal" value="0"></label>
       <label>Valor unitário<input name="valor_unitario" data-money inputmode="numeric"><small class="muted">Para tinta, é preenchido automaticamente como custo por ml.</small></label></div>
       <label>Observações<textarea name="observacoes"></textarea></label>${catalogLists}<button class="primary">Cadastrar material</button></form>`;
@@ -887,15 +887,15 @@ function openStockAction(action, itemId = "") {
       <div class="fields"><label>Tipo do material<input name="tipo_material" list="stockTypeOptions" value="${escapeHtml(item.tipo_material || "")}"></label><label>Categoria<input name="categoria" list="stockCategoryOptions" value="${escapeHtml(item.categoria)}"></label></div>
       <label>Marca<input name="marca" list="stockBrandOptions" value="${escapeHtml(item.marca)}"></label>
       <div class="ink-only-fields" ${item.tipo_item === "Tinta" ? "" : "hidden"}><div class="fields"><label>Cor da tinta<input name="cor" value="${escapeHtml(item.cor)}"></label><label>Número do lote<input name="lote" value="${escapeHtml(item.lote)}"></label></div>
-      <div class="fields"><label>Volume da embalagem (ml)<input name="volume_embalagem_ml" type="number" min="0" step=".01" inputmode="decimal" value="${item.volume_embalagem_ml || ""}"></label><label>Validade do fabricante<input name="data_validade" type="date" value="${item.data_validade || ""}"></label></div>
+      <label>Validade do fabricante<input name="data_validade" type="date" value="${item.data_validade || ""}"></label>
       <div class="fields"><label>Validade após aberto (dias)<input name="validade_apos_aberto_dias" type="number" min="1" step="1" inputmode="numeric" value="${item.validade_apos_aberto_dias || ""}"></label><label>Data de abertura<input name="data_abertura" type="date" value="${item.data_abertura || ""}"></label></div>
       <label>Alertar com antecedência de<input name="alerta_validade_dias" type="number" min="1" step="1" inputmode="numeric" value="${item.alerta_validade_dias || 30}"></label>
-      <label>Estimativa de ml por gota<input name="ml_por_gota" type="number" min=".0001" step=".0001" inputmode="decimal" value="${item.ml_por_gota || 0.05}"></label>
-      <div class="fields"><label>Valor pago no pote<input name="valor_compra_embalagem" data-money inputmode="numeric" value="${item.valor_compra_embalagem ? moneyInput(item.valor_compra_embalagem) : ""}"></label><label>Margem para venda (%)<input name="margem_venda_percentual" type="number" min="0" step=".01" inputmode="decimal" value="${item.margem_venda_percentual || 0}"></label></div>
-      <input type="hidden" name="valor_venda_unitario" value="${item.valor_venda_unitario || ""}"><div class="card stock-cost-preview muted" data-stock-cost-preview></div></div>
+      <label>Estimativa de ml por gota<input name="ml_por_gota" type="number" min=".0001" step=".0001" inputmode="decimal" value="${item.ml_por_gota || 0.05}"></label></div>
       <div class="fields"><label>Unidade<input name="unidade" data-stock-unit value="${escapeHtml(item.unidade)}" required></label>
       <label>Estoque mínimo<input name="quantidade_minima" type="number" min="0" step=".01" inputmode="decimal" value="${item.quantidade_minima}"></label></div>
-      <label>Valor unitário<input name="valor_unitario" data-money inputmode="numeric" value="${moneyInput(item.valor_custo_unitario || item.valor_unitario)}"><small class="muted">Para tinta, é o custo calculado por ml.</small></label>
+      <div class="fields"><label>Volume/quantidade da embalagem<input name="volume_embalagem_ml" type="number" min="0" step=".01" inputmode="decimal" value="${item.volume_embalagem_ml || ""}"><small class="muted">Ex.: frasco de 240 ml ou caixa com 20 unidades.</small></label><label>Valor pago na embalagem<input name="valor_compra_embalagem" data-money inputmode="numeric" value="${item.valor_compra_embalagem ? moneyInput(item.valor_compra_embalagem) : ""}"></label></div>
+      <div class="fields"><label>Margem para venda (%)<input name="margem_venda_percentual" type="number" min="0" step=".01" inputmode="decimal" value="${item.margem_venda_percentual || 0}"></label><div class="card stock-cost-preview muted" data-stock-cost-preview></div></div><input type="hidden" name="valor_venda_unitario" value="${item.valor_venda_unitario || ""}">
+      <label>Valor unitário<input name="valor_unitario" data-money inputmode="numeric" value="${moneyInput(item.valor_custo_unitario || item.valor_unitario)}"><small class="muted">Custo por unidade de controle. Se informar embalagem e valor pago, é calculado automaticamente.</small></label>
       <label>Observações<textarea name="observacoes">${escapeHtml(item.observacoes)}</textarea></label>${catalogLists}<button class="primary">Salvar material</button></form>`;
   } else {
     title = "Movimentar estoque";
@@ -912,10 +912,11 @@ function openStockAction(action, itemId = "") {
   const typeField = $("#stockActionForm").elements.tipo_item;
   const updateInkCostPreview = () => {
     const form = $("#stockActionForm");
-    if (!form?.elements.tipo_item || form.elements.tipo_item.value !== "Tinta") return;
+    if (!form) return;
     const volume = Number(form.elements.volume_embalagem_ml?.value || 0);
     const paid = moneyNumber(form.elements.valor_compra_embalagem?.value || "");
     const margin = Number(form.elements.margem_venda_percentual?.value || 0);
+    const unit = form.elements.unidade?.value || "un.";
     const cost = volume > 0 && paid > 0 ? Math.round((paid / volume) * 10000) / 10000 : 0;
     const sale = cost > 0 ? Math.round((cost * (1 + Math.max(0, margin) / 100)) * 10000) / 10000 : 0;
     if (cost > 0 && form.elements.valor_unitario) form.elements.valor_unitario.value = moneyInput(cost);
@@ -923,8 +924,8 @@ function openStockAction(action, itemId = "") {
     const preview = $("[data-stock-cost-preview]", form);
     if (preview) {
       preview.innerHTML = cost > 0
-        ? `Custo calculado: <strong>${money(cost)} por ml</strong>${margin > 0 ? ` · sugestão de venda: <strong>${money(sale)} por ml</strong>` : ""}`
-        : "Informe o volume e o valor pago para calcular o custo por ml.";
+        ? `Custo calculado: <strong>${money(cost)} por ${escapeHtml(unit)}</strong>${margin > 0 ? ` · sugestão de venda: <strong>${money(sale)} por ${escapeHtml(unit)}</strong>` : ""}`
+        : "Informe a quantidade da embalagem e o valor pago para calcular o custo unitário.";
     }
   };
   if (typeField) {
@@ -942,9 +943,10 @@ function openStockAction(action, itemId = "") {
       updateInkCostPreview();
     };
     typeField.onchange = toggleInkFields;
-    ["volume_embalagem_ml", "valor_compra_embalagem", "margem_venda_percentual"].forEach(name => {
+    ["volume_embalagem_ml", "valor_compra_embalagem", "margem_venda_percentual", "unidade"].forEach(name => {
       const field = $("#stockActionForm").elements[name];
       if (field) field.addEventListener("input", updateInkCostPreview);
+      if (field) field.addEventListener("change", updateInkCostPreview);
     });
     updateInkCostPreview();
   }
