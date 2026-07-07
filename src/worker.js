@@ -709,6 +709,18 @@ async function stock(db, request, url, studioId) {
   const match = url.pathname.match(/^\/api\/estoque(?:\/(\d+))?(?:\/movimentos)?$/);
   if (!match) return null;
   const itemId = integer(match[1]);
+  const saveStockCatalogs = async data => {
+    const rows = [
+      ["estoque_tipos", data.tipo_material],
+      ["estoque_categorias", data.categoria],
+      ["estoque_marcas", data.marca]
+    ].filter(([, value]) => String(value || "").trim());
+    if (!rows.length) return;
+    await db.batch(rows.map(([table, value]) =>
+      db.prepare(`INSERT OR IGNORE INTO ${table}(id_estudio,nome) VALUES(?,?)`)
+        .bind(studioId, String(value).trim())
+    ));
+  };
   if (request.method === "GET" && url.pathname === "/api/estoque") {
     const search = `%${url.searchParams.get("busca") || ""}%`;
     const summary = await db.prepare(`
@@ -721,12 +733,13 @@ async function stock(db, request, url, studioId) {
       SELECT id,nome,categoria,marca,unidade,quantidade_atual,quantidade_minima,
         valor_unitario,observacoes,tipo_item,cor,volume_embalagem_ml,ml_por_gota,
         lote,data_validade,validade_apos_aberto_dias,data_abertura,alerta_validade_dias,
-        valor_compra_embalagem,valor_custo_unitario,margem_venda_percentual,valor_venda_unitario
+        valor_compra_embalagem,valor_custo_unitario,margem_venda_percentual,valor_venda_unitario,
+        tipo_material
       FROM estoque WHERE ativo=1 AND id_estudio=? AND (nome LIKE ? COLLATE NOCASE
         OR categoria LIKE ? COLLATE NOCASE OR marca LIKE ? COLLATE NOCASE
-        OR cor LIKE ? COLLATE NOCASE OR lote LIKE ? COLLATE NOCASE)
+        OR tipo_material LIKE ? COLLATE NOCASE OR cor LIKE ? COLLATE NOCASE OR lote LIKE ? COLLATE NOCASE)
       ORDER BY nome LIMIT 100
-    `).bind(studioId, search, search, search, search, search).all();
+    `).bind(studioId, search, search, search, search, search, search).all();
     const today = saoPauloDate();
     const inventory = items.map(item => {
       const expiry = item.tipo_item === "Tinta" ? effectiveInkExpiry(item) : null;
@@ -751,7 +764,17 @@ async function stock(db, request, url, studioId) {
       WHERE e.id_estudio=?
       ORDER BY em.data_movimento DESC,em.id DESC LIMIT 100
     `).bind(studioId).all();
-    return json({ resumo: summary, itens: inventory, alertas: alerts, historico: history });
+    const catalogs = {};
+    for (const [key, table] of Object.entries({
+      tipos: "estoque_tipos",
+      categorias: "estoque_categorias",
+      marcas: "estoque_marcas"
+    })) {
+      catalogs[key] = (await db.prepare(`
+        SELECT nome FROM ${table} WHERE id_estudio=? ORDER BY nome
+      `).bind(studioId).all()).results.map(item => item.nome);
+    }
+    return json({ resumo: summary, itens: inventory, alertas: alerts, historico: history, catalogos: catalogs });
   }
   if (request.method === "POST" && url.pathname === "/api/estoque") {
     const data = await body(request);
@@ -781,8 +804,9 @@ async function stock(db, request, url, studioId) {
         quantidade_minima,valor_unitario,observacoes,ativo,tipo_item,cor,
         volume_embalagem_ml,ml_por_gota,lote,data_validade,
         validade_apos_aberto_dias,data_abertura,alerta_validade_dias,
-        valor_compra_embalagem,valor_custo_unitario,margem_venda_percentual,valor_venda_unitario)
-      VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        valor_compra_embalagem,valor_custo_unitario,margem_venda_percentual,valor_venda_unitario,
+        tipo_material)
+      VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(studioId, name, data.categoria || "", data.marca || "", data.unidade || "un.",
       quantity, number(data.quantidade_minima), costUnitValue, data.observacoes || "",
       isInk ? "Tinta" : "Material", isInk ? data.cor || "" : "",
@@ -792,7 +816,13 @@ async function stock(db, request, url, studioId) {
       isInk ? integer(data.validade_apos_aberto_dias) || null : null,
       isInk ? data.data_abertura || null : null,
       isInk ? integer(data.alerta_validade_dias) || 30 : 30,
-      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue).run();
+      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue,
+      data.tipo_material || (isInk ? "Tinta" : "")).run();
+    await saveStockCatalogs({
+      tipo_material: data.tipo_material || (isInk ? "Tinta" : ""),
+      categoria: data.categoria,
+      marca: data.marca
+    });
     if (quantity > 0) {
       await db.prepare(`
         INSERT INTO estoque_movimentos
@@ -825,7 +855,7 @@ async function stock(db, request, url, studioId) {
         volume_embalagem_ml=?,ml_por_gota=?,lote=?,data_validade=?,
         validade_apos_aberto_dias=?,data_abertura=?,alerta_validade_dias=?,
         valor_compra_embalagem=?,valor_custo_unitario=?,margem_venda_percentual=?,
-        valor_venda_unitario=? WHERE id=?
+        valor_venda_unitario=?,tipo_material=? WHERE id=?
     `).bind(required(data.nome, "nome"), data.categoria || "", data.marca || "",
       data.unidade || "un.", number(data.quantidade_minima),
       costUnitValue, data.observacoes || "",
@@ -836,7 +866,13 @@ async function stock(db, request, url, studioId) {
       isInk ? integer(data.validade_apos_aberto_dias) || null : null,
       isInk ? data.data_abertura || null : null,
       isInk ? integer(data.alerta_validade_dias) || 30 : 30,
-      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue, itemId).run();
+      isInk ? purchaseValue : 0, costUnitValue, isInk ? margin : 0, saleUnitValue,
+      data.tipo_material || (isInk ? "Tinta" : ""), itemId).run();
+    await saveStockCatalogs({
+      tipo_material: data.tipo_material || (isInk ? "Tinta" : ""),
+      categoria: data.categoria,
+      marca: data.marca
+    });
     return json({ ok: true });
   }
   if (request.method === "POST" && url.pathname === `/api/estoque/${itemId}/movimentos`) {
