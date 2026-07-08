@@ -1,0 +1,5 @@
+ALTER TABLE planejamento_marketing
+ADD COLUMN id_lancamento_impulsionamento INTEGER;
+
+CREATE INDEX idx_marketing_lancamento_impulsionamento
+ON planejamento_marketing(id_lancamento_impulsionamento);

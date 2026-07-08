@@ -76,6 +76,84 @@ function marketingOpportunities() {
     items.findIndex(candidate => candidate.key === item.key) === index);
 }
 
+const validDate = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+
+async function syncMarketingBoostFinance(db, studioId, planId) {
+  const plan = await db.prepare(`
+    SELECT id,id_estudio,titulo,impulsionar,impulsionamento_inicio,
+      data_postagem,data_inicio,orcamento,id_lancamento_impulsionamento
+    FROM planejamento_marketing
+    WHERE id=? AND id_estudio=?
+  `).bind(planId, studioId).first();
+  if (!plan) return;
+  const launchId = integer(plan.id_lancamento_impulsionamento);
+  const value = number(plan.orcamento);
+  const active = Number(plan.impulsionar) === 1 && value > 0;
+  if (!active) {
+    if (launchId) {
+      await db.batch([
+        db.prepare(`
+          UPDATE gestao_financeira SET status='Cancelado'
+          WHERE id=? AND id_estudio=?
+        `).bind(launchId, studioId),
+        db.prepare(`
+          UPDATE caixa SET status='Cancelado'
+          WHERE id_lancamento=? AND id_estudio=?
+        `).bind(launchId, studioId)
+      ]);
+    }
+    return;
+  }
+  const paymentDate = [
+    plan.impulsionamento_inicio,
+    plan.data_postagem,
+    plan.data_inicio,
+    saoPauloDate()
+  ].find(validDate);
+  const competence = paymentDate.slice(0, 7);
+  const description = `Impulsionamento Instagram - ${plan.titulo}`;
+  const observations = `Gerado automaticamente pelo planejamento de marketing #${plan.id}.`;
+  const ensureCash = async id => {
+    const updated = await db.prepare(`
+      UPDATE caixa SET status='Ativo',data_movimento=?,tipo='Saida',
+        categoria='Marketing',descricao=?,valor=?,forma_pagamento='Credito'
+      WHERE id_lancamento=? AND id_estudio=?
+    `).bind(paymentDate, description, value, id, studioId).run();
+    if (!updated.meta.changes) {
+      await db.prepare(`
+        INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,
+          forma_pagamento,id_lancamento)
+        VALUES(?,?,'Saida','Marketing',?,?,'Credito',?)
+      `).bind(studioId, paymentDate, description, value, id).run();
+    }
+  };
+  if (launchId) {
+    const updated = await db.prepare(`
+      UPDATE gestao_financeira SET tipo='Despesa',categoria='Marketing',
+        descricao=?,valor=?,competencia=?,data_vencimento=?,data_pagamento=?,
+        forma_pagamento='Credito',status='Pago',observacoes=?
+      WHERE id=? AND id_estudio=?
+    `).bind(description, value, competence, paymentDate, paymentDate,
+      observations, launchId, studioId).run();
+    if (updated.meta.changes) {
+      await ensureCash(launchId);
+      return;
+    }
+  }
+  const created = await db.prepare(`
+    INSERT INTO gestao_financeira(id_estudio,tipo,categoria,descricao,valor,
+      competencia,data_vencimento,data_pagamento,forma_pagamento,status,observacoes)
+    VALUES(?,'Despesa','Marketing',?,?,?,?,?,'Credito','Pago',?)
+  `).bind(studioId, description, value, competence, paymentDate, paymentDate,
+    observations).run();
+  const newLaunchId = created.meta.last_row_id;
+  await db.prepare(`
+    UPDATE planejamento_marketing SET id_lancamento_impulsionamento=?
+    WHERE id=? AND id_estudio=?
+  `).bind(newLaunchId, plan.id, studioId).run();
+  await ensureCash(newLaunchId);
+}
+
 function brDateTime(value) {
   if (!value) return "";
   const [date, time = ""] = value.split(" ");
@@ -2774,7 +2852,9 @@ async function api(request, env, url, user) {
       data.texto_postagem || "", data.objetivo || "", data.publico || "",
       data.impulsionar ? 1 : 0, data.impulsionamento_inicio || null,
       data.impulsionamento_fim || null, number(data.orcamento), data.observacoes || "").run();
-    return json({ ok: true, id: created.meta.last_row_id }, 201);
+    const planId = created.meta.last_row_id;
+    await syncMarketingBoostFinance(db, studioId, planId);
+    return json({ ok: true, id: planId }, 201);
   }
   const marketingArtMatch = url.pathname.match(/^\/api\/marketing\/(\d+)\/arte$/);
   if (marketingArtMatch) {
@@ -2824,13 +2904,22 @@ async function api(request, env, url, user) {
       data.impulsionamento_fim || null, number(data.orcamento),
       data.observacoes || "", integer(marketingMatch[1]), studioId).run();
     if (!result.meta.changes) return error("Planejamento não encontrado.", 404);
+    await syncMarketingBoostFinance(db, studioId, integer(marketingMatch[1]));
     return json({ ok: true });
   }
   if (marketingMatch && request.method === "DELETE") {
     const plan = await db.prepare(
-      "SELECT id FROM planejamento_marketing WHERE id=? AND id_estudio=?"
+      "SELECT id,id_lancamento_impulsionamento FROM planejamento_marketing WHERE id=? AND id_estudio=?"
     ).bind(integer(marketingMatch[1]), studioId).first();
     if (!plan) return error("Planejamento não encontrado.", 404);
+    if (plan.id_lancamento_impulsionamento) {
+      await db.batch([
+        db.prepare("UPDATE gestao_financeira SET status='Cancelado' WHERE id=? AND id_estudio=?")
+          .bind(plan.id_lancamento_impulsionamento, studioId),
+        db.prepare("UPDATE caixa SET status='Cancelado' WHERE id_lancamento=? AND id_estudio=?")
+          .bind(plan.id_lancamento_impulsionamento, studioId)
+      ]);
+    }
     await db.prepare("DELETE FROM marketing_oportunidade_planos WHERE id_planejamento=?")
       .bind(integer(marketingMatch[1])).run();
     await db.prepare("DELETE FROM marketing_artes WHERE id_planejamento=?")
