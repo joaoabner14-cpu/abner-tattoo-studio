@@ -1715,7 +1715,8 @@ async function openOrder(appointmentId, initialTab = "os-data") {
       <strong>${ink.gotas} gotas</strong><small>${ink.volume_consumido_ml} ml estimados</small></div>`).join("")}</div>
     ${cup.observacao ? `<p class="muted">${escapeHtml(cup.observacao)}</p>` : ""}
   </article>`).join("") || `<div class="card muted">Nenhuma mistura de tinta registrada.</div>`;
-  $("#orderContent").innerHTML = `<header><h2>Ordem de serviço #${data.id_os}</h2><button class="close" type="button">×</button></header>
+  const isOrderFinished = data.status === "Finalizada" || data.status_agendamento === "Concluido";
+  $("#orderContent").innerHTML = `<header><h2>Ordem de serviço #${data.id_os}</h2><div class="order-header-actions">${!isOrderFinished ? `<button class="primary finish-order" type="button" data-os="${data.id_os}">Finalizar ordem</button>` : `<span class="badge badge-done">Finalizada</span>`}<button class="close" type="button">×</button></div></header>
     <div class="tabs"><button class="tab active" data-tab="os-data">Cliente</button><button class="tab" data-tab="os-service">Serviço</button><button class="tab" data-tab="os-schedule">Agendamento</button>${hasModule("financeiro") ? `<button class="tab" data-tab="os-finance">Financeiro</button>` : ""}</div>
     <div class="tab-pane active" id="os-data">
       <div class="crm-header order-client-header">
@@ -1745,7 +1746,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
       <button class="secondary" type="button" data-finance-action="adjustment">Acréscimo ou desconto</button></div>
       ${installmentHtml ? `<h2>Parcelas</h2>${installmentHtml}` : ""}
       <h2>Histórico financeiro</h2><div class="finance-history">${financeHistory}</div></div>` : ""}`;
-  $("#orderDialog").showModal();
+  if (!$("#orderDialog").open) $("#orderDialog").showModal();
   $(`[data-tab=${initialTab}]`, $("#orderDialog"))?.click();
   $("#scheduleForm").onsubmit = async e => {
     e.preventDefault();
@@ -1807,6 +1808,17 @@ document.addEventListener("click", event => {
   if (financeAction) openFinanceAction(financeAction.dataset.financeAction);
   const serviceAction = event.target.closest("[data-service-action]");
   if (serviceAction) openServiceAction(serviceAction.dataset.serviceAction);
+  const finishOrder = event.target.closest(".finish-order");
+  if (finishOrder && confirm("Finalizar esta ordem de serviço?")) {
+    post(`/api/os/${finishOrder.dataset.os}/finalizar`)
+      .then(async () => {
+        toast("Ordem finalizada.");
+        calendar?.refetchEvents();
+        if (activeOrderData?.id_agendamento) await openOrder(activeOrderData.id_agendamento);
+        if (selectedClientId) await loadClient(selectedClientId);
+      })
+      .catch(error => toast(error.message));
+  }
   const crmOrder = event.target.closest(".edit-crm-order");
   if (crmOrder) openCrmOrderEdit(crmOrder.dataset.id);
   const photoPreview = event.target.closest(".open-photo-preview");

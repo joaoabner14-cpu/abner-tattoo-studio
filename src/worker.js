@@ -334,17 +334,22 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
     if (!enabledModules.has("financeiro")) installments.length = 0;
     if (!enabledModules.has("marketing")) marketing.length = 0;
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
-      .map(x => ({
+      .map(x => {
+        const color = x.status === "Concluido" ? "#36b37e" : x.cor_agenda || "#735f3c";
+        return {
         id: `agendamento-${x.id}`,
         title: `${x.nome}${x.tatuador ? ` · ${x.tatuador}` : ""}`,
         start: x.data_hora.replace(" ", "T"),
-        backgroundColor: x.cor_agenda || "#735f3c",
-        borderColor: x.cor_agenda || "#735f3c",
+        backgroundColor: color,
+        borderColor: color,
+        textColor: x.status === "Concluido" ? "#071a11" : undefined,
         extendedProps: {
           tipo: "agendamento", id_agendamento: x.id,
-          id_tatuador: x.id_tatuador, tatuador: x.tatuador
+          id_tatuador: x.id_tatuador, tatuador: x.tatuador,
+          status: x.status
         }
-      }));
+      };
+    });
     const today = saoPauloDate();
     const payments = installments.map(x => {
       const overdue = x.data_vencimento < today;
@@ -389,7 +394,8 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
   const tomorrow = saoPauloDate(1);
   const grouped = {};
   for (const row of results.filter(x =>
-    x.data_hora.slice(0, 10) >= today && x.status.toLowerCase() !== "cancelado"
+    x.data_hora.slice(0, 10) >= today &&
+    !["cancelado", "concluido"].includes(x.status.toLowerCase())
   )) {
     const date = row.data_hora.slice(0, 10);
     const phone = row.telefone.replace(/\D/g, "");
@@ -623,9 +629,51 @@ async function orderService(db, request, url, studioId) {
   const parts = url.pathname.split("/");
   const osId = integer(parts[3]);
   const order = await db.prepare(
-    "SELECT id FROM ordem_servico WHERE id=? AND id_estudio=?"
+    "SELECT id,id_cliente,id_agendamento,status FROM ordem_servico WHERE id=? AND id_estudio=?"
   ).bind(osId, studioId).first();
   if (!order) return error("Ordem de serviço não encontrada.", 404);
+  if (request.method === "POST" && parts[4] === "finalizar") {
+    if (order.status === "Finalizada") return json({ ok: true, finalizada: true });
+    const appointment = order.id_agendamento ? await db.prepare(`
+      SELECT data_hora FROM agendamentos WHERE id=? AND id_estudio=?
+    `).bind(order.id_agendamento, studioId).first() : null;
+    const executionDate = appointment?.data_hora?.slice(0, 10) || saoPauloDate();
+    const financial = await db.prepare(`
+      SELECT f.id,f.valor_final,
+        COALESCE(SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
+          WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END),0) pago
+      FROM financeiro f
+      LEFT JOIN financeiro_movimentos fm ON fm.id_financeiro=f.id
+      WHERE f.id_os=? AND f.id_estudio=? AND f.status<>'Cancelado'
+      GROUP BY f.id
+    `).bind(osId, studioId).first();
+    const statements = [
+      db.prepare(`
+        UPDATE ordem_servico SET status='Finalizada',data_execucao=?
+        WHERE id=? AND id_estudio=?
+      `).bind(executionDate, osId, studioId),
+      db.prepare(`
+        INSERT INTO crm_eventos(id_estudio,id_cliente,id_os,id_agendamento,tipo,descricao)
+        VALUES(?,?,?,?,?,?)
+      `).bind(studioId, order.id_cliente, osId, order.id_agendamento || null,
+        "Sessao concluida", `Ordem de servico #${osId} finalizada.`)
+    ];
+    if (order.id_agendamento) {
+      statements.push(db.prepare(`
+        UPDATE agendamentos SET status='Concluido',faltou=0
+        WHERE id=? AND id_estudio=?
+      `).bind(order.id_agendamento, studioId));
+    }
+    if (financial) {
+      const paid = Number(financial.pago || 0);
+      const total = Number(financial.valor_final || 0);
+      const status = paid >= total ? "Pago" : paid > 0 ? "Parcial" : "Pendente";
+      statements.push(db.prepare("UPDATE financeiro SET status=? WHERE id=? AND id_estudio=?")
+        .bind(status, financial.id, studioId));
+    }
+    await db.batch(statements);
+    return json({ ok: true, finalizada: true });
+  }
   if (request.method === "PUT" && parts.length === 4) {
     const data = await body(request);
     await db.prepare("UPDATE ordem_servico SET descricao=? WHERE id=?")
@@ -3133,7 +3181,7 @@ async function api(request, env, url, user) {
   }
   if (request.method === "GET" && url.pathname === "/api/os")
     return openOrder(db, url, studioId, enabledModules);
-  if (/^\/api\/os\/\d+(?:\/(?:materiais|tintas)(?:\/\d+)?)?$/.test(url.pathname)) {
+  if (/^\/api\/os\/\d+(?:\/(?:materiais|tintas|finalizar)(?:\/\d+)?)?$/.test(url.pathname)) {
     const response = await orderService(db, request, url, studioId);
     if (response) return response;
   }
