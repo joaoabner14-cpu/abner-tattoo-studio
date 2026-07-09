@@ -153,15 +153,15 @@ async function showAgenda() {
 
 async function openPostSaleTask(taskId) {
   const task = await api(`/api/pos-venda/${taskId}`);
-  $("#actionContent").innerHTML = `<header><h2>Pos-venda da OS #${task.id_os}</h2><button class="close" type="button">Ã—</button></header>
+  $("#actionContent").innerHTML = `<header><h2>Pós-venda da OS #${task.id_os}</h2><button class="close" type="button" aria-label="Fechar">X</button></header>
     <div class="card">
       <strong>${escapeHtml(task.nome)}</strong>
-      <div class="muted">${task.dias_apos} dias apos a sessao · tarefa para ${dateBr(task.data_tarefa)}</div>
-      <p>${escapeHtml(task.descricao || "Acompanhar cicatrizacao da tatuagem.")}</p>
+      <div class="muted">${task.dias_apos} dias após a sessão · tarefa para ${dateBr(task.data_tarefa)}</div>
+      <p>${escapeHtml(task.descricao || "Acompanhar cicatrização da tatuagem.")}</p>
     </div>
     <div class="finance-actions">
       <a class="primary" target="_blank" rel="noopener" href="${escapeHtml(task.link_whatsapp)}">Enviar WhatsApp</a>
-      <button class="secondary complete-post-sale" type="button" data-id="${task.id}">Marcar como concluida</button>
+      <button class="secondary complete-post-sale" type="button" data-id="${task.id}">Marcar como concluída</button>
     </div>`;
   $("#actionDialog").showModal();
 }
@@ -1832,7 +1832,7 @@ document.addEventListener("click", event => {
     post(`/api/pos-venda/${completePostSale.dataset.id}/concluir`)
       .then(() => {
         $("#actionDialog").close();
-        toast("Pos-venda concluido.");
+        toast("Pós-venda concluído.");
         calendar?.refetchEvents();
         if (selectedClientId) loadClient(selectedClientId);
       })
