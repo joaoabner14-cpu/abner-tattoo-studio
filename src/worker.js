@@ -331,6 +331,14 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
       WHERE id_estudio=? AND COALESCE(data_inicio,data_postagem) IS NOT NULL
         AND status NOT IN ('Encerrado')
     `).bind(studioId).all();
+    const { results: postSales } = await db.prepare(`
+      SELECT pv.id,pv.data_tarefa,pv.dias_apos,pv.id_os,pv.id_agendamento,
+        c.nome
+      FROM pos_venda_tarefas pv
+      JOIN clientes c ON c.id=pv.id_cliente
+      WHERE pv.id_estudio=? AND pv.status='Pendente'
+      ORDER BY pv.data_tarefa
+    `).bind(studioId).all();
     if (!enabledModules.has("financeiro")) installments.length = 0;
     if (!enabledModules.has("marketing")) marketing.length = 0;
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
@@ -388,7 +396,22 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
         extendedProps: { tipo: "marketing", id_marketing: item.id }
       };
     });
-    return json([...appointments, ...payments, ...marketingEvents]);
+    const postSaleEvents = postSales.map(item => ({
+      id: `pos-venda-${item.id}`,
+      title: `Pos-venda · ${item.dias_apos} dias · ${item.nome}`,
+      start: item.data_tarefa,
+      allDay: true,
+      backgroundColor: "#60a5fa",
+      borderColor: "#60a5fa",
+      textColor: "#07111f",
+      extendedProps: {
+        tipo: "pos_venda",
+        id_pos_venda: item.id,
+        id_agendamento: item.id_agendamento,
+        id_os: item.id_os
+      }
+    }));
+    return json([...appointments, ...payments, ...marketingEvents, ...postSaleEvents]);
   }
   const today = saoPauloDate();
   const tomorrow = saoPauloDate(1);
@@ -658,6 +681,14 @@ async function orderService(db, request, url, studioId) {
       `).bind(studioId, order.id_cliente, osId, order.id_agendamento || null,
         "Sessao concluida", `Ordem de servico #${osId} finalizada.`)
     ];
+    for (const days of [5, 15]) {
+      statements.push(db.prepare(`
+        INSERT OR IGNORE INTO pos_venda_tarefas
+          (id_estudio,id_cliente,id_os,id_agendamento,dias_apos,data_tarefa)
+        VALUES(?,?,?,?,?,?)
+      `).bind(studioId, order.id_cliente, osId, order.id_agendamento || null,
+        days, addDays(executionDate, days)));
+    }
     if (order.id_agendamento) {
       statements.push(db.prepare(`
         UPDATE agendamentos SET status='Concluido',faltou=0
@@ -826,6 +857,47 @@ async function orderService(db, request, url, studioId) {
       );
     }
     await db.batch(statements);
+    return json({ ok: true });
+  }
+  return null;
+}
+
+async function postSaleTask(db, request, url, studioId) {
+  const match = url.pathname.match(/^\/api\/pos-venda\/(\d+)(?:\/concluir)?$/);
+  if (!match) return null;
+  const taskId = integer(match[1]);
+  const task = await db.prepare(`
+    SELECT pv.*,c.nome,c.telefone,os.descricao,a.data_hora
+    FROM pos_venda_tarefas pv
+    JOIN clientes c ON c.id=pv.id_cliente
+    JOIN ordem_servico os ON os.id=pv.id_os
+    LEFT JOIN agendamentos a ON a.id=pv.id_agendamento
+    WHERE pv.id=? AND pv.id_estudio=?
+  `).bind(taskId, studioId).first();
+  if (!task) return error("Tarefa de pos-venda nao encontrada.", 404);
+  if (request.method === "GET" && url.pathname === `/api/pos-venda/${taskId}`) {
+    const message = encodeURIComponent(
+      `Oi, ${task.nome}. Passando para saber como esta a cicatrizacao da sua tatuagem. Esta tudo certinho? Se puder, me manda uma foto para eu acompanhar.`
+    );
+    return json({
+      ...task,
+      link_whatsapp: `https://wa.me/${whatsappPhone(task.telefone)}?text=${message}`
+    });
+  }
+  if (request.method === "POST" && url.pathname === `/api/pos-venda/${taskId}/concluir`) {
+    if (task.status === "Concluida") return json({ ok: true });
+    await db.batch([
+      db.prepare(`
+        UPDATE pos_venda_tarefas
+        SET status='Concluida',data_conclusao=CURRENT_TIMESTAMP
+        WHERE id=? AND id_estudio=?
+      `).bind(taskId, studioId),
+      db.prepare(`
+        INSERT INTO crm_eventos(id_estudio,id_cliente,id_os,id_agendamento,tipo,descricao)
+        VALUES(?,?,?,?,?,?)
+      `).bind(studioId, task.id_cliente, task.id_os, task.id_agendamento || null,
+        "Pos-venda", `Contato de pos-venda de ${task.dias_apos} dias concluido.`)
+    ]);
     return json({ ok: true });
   }
   return null;
@@ -2127,6 +2199,7 @@ async function studioDataExport(db, studioId) {
     artes_marketing: `SELECT ma.* FROM marketing_artes ma
       JOIN planejamento_marketing pm ON pm.id=ma.id_planejamento
       WHERE pm.id_estudio=? ORDER BY ma.id_planejamento`,
+    pos_venda_tarefas: "SELECT * FROM pos_venda_tarefas WHERE id_estudio=? ORDER BY id",
     eventos_crm: "SELECT * FROM crm_eventos WHERE id_estudio=? ORDER BY id",
     fotos_clientes: `SELECT fc.* FROM crm_fotos_clientes fc
       JOIN clientes c ON c.id=fc.id_cliente WHERE c.id_estudio=?`,
@@ -2677,6 +2750,7 @@ function requiredModules(pathname) {
   if (pathname.startsWith("/api/clientes") || pathname.startsWith("/api/crm"))
     return ["clientes"];
   if (pathname === "/api/tatuadores" || pathname.startsWith("/api/agendamentos") ||
+    pathname.startsWith("/api/pos-venda") ||
     pathname === "/api/os" ||
     /^\/api\/os\//.test(pathname)) return ["agenda"];
   return [];
@@ -3052,6 +3126,10 @@ async function api(request, env, url, user) {
   if (clientResponse) return clientResponse;
   const stockResponse = await stock(db, request, url, studioId);
   if (stockResponse) return stockResponse;
+  if (url.pathname.startsWith("/api/pos-venda")) {
+    const postSaleResponse = await postSaleTask(db, request, url, studioId);
+    if (postSaleResponse) return postSaleResponse;
+  }
   if (url.pathname.startsWith("/api/financeiro/")) {
     const managementResponse = await financialManagement(db, request, url, studioId);
     if (managementResponse) return managementResponse;

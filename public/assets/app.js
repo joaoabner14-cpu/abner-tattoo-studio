@@ -122,6 +122,10 @@ async function loadAgenda() {
           openMarketingRecord(info.event.extendedProps.id_marketing);
           return;
         }
+        if (tipo === "pos_venda") {
+          openPostSaleTask(info.event.extendedProps.id_pos_venda);
+          return;
+        }
         if (!appointmentId) return;
         openOrder(appointmentId, tipo === "crediario" ? "os-finance" : "os-data");
       }
@@ -145,6 +149,21 @@ async function loadAgenda() {
 async function showAgenda() {
   await loadAgenda();
   requestAnimationFrame(() => requestAnimationFrame(() => calendar?.updateSize()));
+}
+
+async function openPostSaleTask(taskId) {
+  const task = await api(`/api/pos-venda/${taskId}`);
+  $("#actionContent").innerHTML = `<header><h2>Pos-venda da OS #${task.id_os}</h2><button class="close" type="button">Ã—</button></header>
+    <div class="card">
+      <strong>${escapeHtml(task.nome)}</strong>
+      <div class="muted">${task.dias_apos} dias apos a sessao · tarefa para ${dateBr(task.data_tarefa)}</div>
+      <p>${escapeHtml(task.descricao || "Acompanhar cicatrizacao da tatuagem.")}</p>
+    </div>
+    <div class="finance-actions">
+      <a class="primary" target="_blank" rel="noopener" href="${escapeHtml(task.link_whatsapp)}">Enviar WhatsApp</a>
+      <button class="secondary complete-post-sale" type="button" data-id="${task.id}">Marcar como concluida</button>
+    </div>`;
+  $("#actionDialog").showModal();
 }
 
 async function loadFinance() {
@@ -1808,6 +1827,17 @@ document.addEventListener("click", event => {
   if (financeAction) openFinanceAction(financeAction.dataset.financeAction);
   const serviceAction = event.target.closest("[data-service-action]");
   if (serviceAction) openServiceAction(serviceAction.dataset.serviceAction);
+  const completePostSale = event.target.closest(".complete-post-sale");
+  if (completePostSale) {
+    post(`/api/pos-venda/${completePostSale.dataset.id}/concluir`)
+      .then(() => {
+        $("#actionDialog").close();
+        toast("Pos-venda concluido.");
+        calendar?.refetchEvents();
+        if (selectedClientId) loadClient(selectedClientId);
+      })
+      .catch(error => toast(error.message));
+  }
   const finishOrder = event.target.closest(".finish-order");
   if (finishOrder && confirm("Finalizar esta ordem de serviço?")) {
     post(`/api/os/${finishOrder.dataset.os}/finalizar`)
