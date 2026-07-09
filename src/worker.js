@@ -876,8 +876,9 @@ async function postSaleTask(db, request, url, studioId) {
   `).bind(taskId, studioId).first();
   if (!task) return error("Tarefa de pos-venda nao encontrada.", 404);
   if (request.method === "GET" && url.pathname === `/api/pos-venda/${taskId}`) {
+    const firstName = String(task.nome || "").trim().split(/\s+/)[0] || "";
     const message = encodeURIComponent(
-      `Oi, ${task.nome}. Passando para saber como esta a cicatrizacao da sua tatuagem. Esta tudo certinho? Se puder, me manda uma foto para eu acompanhar.`
+      `${firstName ? `Oi, ${firstName}, tudo bem?` : "Oi, tudo bem?"} Passando para saber como esta a cicatrizacao da sua tatuagem. Esta tudo certinho? Se puder, me manda uma foto para eu acompanhar.`
     );
     return json({
       ...task,
