@@ -312,15 +312,36 @@ async function sendDailyWhatsAppSummaries(env) {
 }
 
 async function listAppointments(db, url, studioId, studioName, enabledModules) {
-  const { results } = await db.prepare(`
+  const listMode = url.searchParams.get("tipo") === "lista";
+  const rangeStart = validDate(url.searchParams.get("start")) ? url.searchParams.get("start") : "";
+  const rangeEnd = validDate(url.searchParams.get("end")) ? url.searchParams.get("end") : "";
+  const hasRange = !listMode && rangeStart && rangeEnd;
+  const todayForList = saoPauloDate();
+  const appointmentSql = listMode ? `
+    SELECT a.id, a.data_hora, a.status, c.nome, c.telefone,
+      a.id_tatuador,u.nome tatuador,u.cor_agenda
+    FROM agendamentos a JOIN clientes c ON c.id = a.id_cliente
+    LEFT JOIN usuarios u ON u.id=a.id_tatuador AND u.id_estudio=a.id_estudio
+    WHERE a.id_estudio=? AND a.data_hora>=?
+      AND a.status NOT IN ('Cancelado','Concluido')
+    ORDER BY a.data_hora
+    LIMIT 200
+  ` : `
     SELECT a.id, a.data_hora, a.status, c.nome, c.telefone,
       a.id_tatuador,u.nome tatuador,u.cor_agenda
     FROM agendamentos a JOIN clientes c ON c.id = a.id_cliente
     LEFT JOIN usuarios u ON u.id=a.id_tatuador AND u.id_estudio=a.id_estudio
     WHERE a.id_estudio=?
+      AND (?=0 OR (a.data_hora>=? AND a.data_hora<?))
     ORDER BY a.data_hora
-  `).bind(studioId).all();
-  if (url.searchParams.get("tipo") !== "lista") {
+  `;
+  const appointmentsStmt = db.prepare(appointmentSql);
+  const { results } = listMode
+    ? await appointmentsStmt.bind(studioId, `${todayForList} 00:00:00`).all()
+    : await appointmentsStmt.bind(
+      studioId, hasRange ? 1 : 0, `${rangeStart} 00:00:00`, `${rangeEnd} 00:00:00`
+    ).all();
+  if (!listMode) {
     const { results: installments } = await db.prepare(`
       SELECT cr.id, cr.numero_parcela, cr.data_vencimento, cr.valor_parcela,
         (SELECT COUNT(*) FROM crediario total
@@ -332,24 +353,30 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
       LEFT JOIN ordem_servico os ON os.id=f.id_os
       LEFT JOIN agendamentos a ON a.id=os.id_agendamento
       WHERE f.id_estudio=? AND cr.status IN ('Pendente','Atrasado')
+        AND (?=0 OR (cr.data_vencimento>=? AND cr.data_vencimento<?))
         AND (a.id IS NULL OR a.status<>'Cancelado')
       ORDER BY cr.data_vencimento, cr.numero_parcela
-    `).bind(studioId).all();
+    `).bind(studioId, hasRange ? 1 : 0, rangeStart, rangeEnd).all();
     const { results: marketing } = await db.prepare(`
       SELECT id,titulo,tipo,status,COALESCE(data_inicio,data_postagem) data_evento,
         data_fim,impulsionar,impulsionamento_inicio,impulsionamento_fim
       FROM planejamento_marketing
       WHERE id_estudio=? AND COALESCE(data_inicio,data_postagem) IS NOT NULL
         AND status NOT IN ('Encerrado')
-    `).bind(studioId).all();
+        AND (?=0 OR (
+          COALESCE(data_inicio,data_postagem)<?
+          AND COALESCE(data_fim,data_inicio,data_postagem)>=?
+        ))
+    `).bind(studioId, hasRange ? 1 : 0, rangeEnd, rangeStart).all();
     const { results: postSales } = await db.prepare(`
       SELECT pv.id,pv.data_tarefa,pv.dias_apos,pv.id_os,pv.id_agendamento,
         c.nome
       FROM pos_venda_tarefas pv
       JOIN clientes c ON c.id=pv.id_cliente
       WHERE pv.id_estudio=? AND pv.status='Pendente'
+        AND (?=0 OR (pv.data_tarefa>=? AND pv.data_tarefa<?))
       ORDER BY pv.data_tarefa
-    `).bind(studioId).all();
+    `).bind(studioId, hasRange ? 1 : 0, rangeStart, rangeEnd).all();
     if (!enabledModules.has("financeiro")) installments.length = 0;
     if (!enabledModules.has("marketing")) marketing.length = 0;
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
@@ -1349,6 +1376,9 @@ async function financialManagement(db, request, url, studioId) {
   if (view === "periodo" && periodStart > periodEnd) {
     return error("A data inicial não pode ser posterior à data final.");
   }
+  const periodEndExclusive = addDays(periodEnd, 1);
+  const yearStart = `${month.slice(0, 4)}-01-01`;
+  const yearEnd = `${Number(month.slice(0, 4)) + 1}-01-01`;
   const cashCancellation = url.pathname.match(/^\/api\/financeiro\/caixa\/(\d+)\/cancelar$/);
   if (request.method === "POST" && cashCancellation) {
     const cashId = integer(cashCancellation[1]);
@@ -1431,13 +1461,14 @@ async function financialManagement(db, request, url, studioId) {
         COALESCE(SUM(CASE WHEN tipo='Saida' THEN valor ELSE 0 END),0) saidas
       FROM caixa
       WHERE id_estudio=? AND status='Ativo'
-        AND (?=1 OR substr(data_movimento,1,10) BETWEEN ? AND ?)
-    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).first();
+        AND (?=1 OR (data_movimento>=? AND data_movimento<?))
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEndExclusive).first();
     const annual = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) faturamento
-      FROM caixa WHERE id_estudio=? AND tipo='Entrada' AND substr(data_movimento,1,4)=?
+      FROM caixa WHERE id_estudio=? AND tipo='Entrada'
+        AND data_movimento>=? AND data_movimento<?
         AND status='Ativo'
-    `).bind(studioId, month.slice(0, 4)).first();
+    `).bind(studioId, yearStart, yearEnd).first();
     const payable = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pendente'
@@ -1517,9 +1548,9 @@ async function financialManagement(db, request, url, studioId) {
       FROM caixa cx LEFT JOIN clientes c ON c.id=cx.id_cliente
       LEFT JOIN ordem_servico os ON os.id=cx.id_os
       WHERE cx.id_estudio=? AND cx.status='Ativo'
-        AND (?=1 OR substr(cx.data_movimento,1,10) BETWEEN ? AND ?)
+        AND (?=1 OR (cx.data_movimento>=? AND cx.data_movimento<?))
       ORDER BY cx.data_movimento DESC,cx.id DESC LIMIT 150
-    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).all();
+    `).bind(studioId, generalView ? 1 : 0, periodStart, periodEndExclusive).all();
     const { results: expenseCategories } = await db.prepare(`
       SELECT categoria,SUM(valor) total FROM gestao_financeira
       WHERE id_estudio=? AND tipo IN ('Despesa','DAS') AND status='Pago'
@@ -1529,10 +1560,11 @@ async function financialManagement(db, request, url, studioId) {
     `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).all();
     const { results: monthlyRevenue } = await db.prepare(`
       SELECT substr(data_movimento,1,7) mes,SUM(valor) total FROM caixa
-      WHERE id_estudio=? AND tipo='Entrada' AND substr(data_movimento,1,4)=?
+      WHERE id_estudio=? AND tipo='Entrada'
+        AND data_movimento>=? AND data_movimento<?
         AND status='Ativo'
       GROUP BY mes ORDER BY mes
-    `).bind(studioId, month.slice(0, 4)).all();
+    `).bind(studioId, yearStart, yearEnd).all();
     return json({
       periodo: month,
       visao: view,
