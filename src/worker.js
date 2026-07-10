@@ -10,6 +10,7 @@ const json = (data, status = 200) =>
   });
 
 const error = (message, status = 400) => json({ error: message }, status);
+const SESSION_TTL_SECONDS = 60 * 60 * 24;
 const number = value => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   let clean = String(value ?? "").trim().replace(/[^\d,.-]/g, "");
@@ -2587,6 +2588,7 @@ async function currentUser(db, request) {
     JOIN usuarios u ON u.id=s.id_usuario
     JOIN estudios e ON e.id=u.id_estudio
     WHERE s.token_hash=? AND s.revogada=0 AND s.data_expiracao>CURRENT_TIMESTAMP
+      AND s.data_criacao>datetime('now','-24 hours')
       AND u.ativo=1 AND e.ativo=1 LIMIT 1
   `).bind(await sha256(token)).first();
   return row || null;
@@ -2596,11 +2598,11 @@ async function createSession(db, request, userId) {
   const token = randomToken(32);
   await db.prepare(`
     INSERT INTO sessoes(id_usuario,token_hash,data_expiracao,ip,user_agent)
-    VALUES(?,?,datetime('now','+30 days'),?,?)
+    VALUES(?,?,datetime('now','+24 hours'),?,?)
   `).bind(userId, await sha256(token), request.headers.get("CF-Connecting-IP") || "",
     (request.headers.get("user-agent") || "").slice(0, 500)).run();
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
-  return `studio_session=${encodeURIComponent(token)}; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=2592000`;
+  return `studio_session=${encodeURIComponent(token)}; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=${SESSION_TTL_SECONDS}`;
 }
 
 const authResponse = (data, status = 200, cookie = null) => {
