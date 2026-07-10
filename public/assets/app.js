@@ -1,9 +1,17 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+let csrfToken = "";
 const api = async (path, options = {}) => {
   const requestOptions = {
     cache: "no-store", credentials: "same-origin", ...options
   };
+  const method = String(requestOptions.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    requestOptions.headers = {
+      ...(requestOptions.headers || {}),
+      "X-CSRF-Token": csrfToken
+    };
+  }
   if (!path.startsWith("/api/auth/") && !requestOptions.signal) {
     requestOptions.signal = sessionAbortController.signal;
   }
@@ -656,7 +664,7 @@ async function openStudioUserEditor(studioId, userId = "") {
     <form id="studioUserForm">
       <label>Nome<input name="nome" value="${escapeHtml(item.nome)}" required></label>
       <label>Usuário de acesso<input name="login" value="${escapeHtml(item.login)}" autocomplete="off" autocapitalize="none" required></label>
-      <label>${item.id ? "Nova senha (opcional)" : "Senha inicial"}<input name="senha" type="password" minlength="8" autocomplete="new-password" ${item.id ? "" : "required"}></label>
+      <label>${item.id ? "Nova senha (opcional)" : "Senha inicial"}<input name="senha" type="password" minlength="10" autocomplete="new-password" ${item.id ? "" : "required"}></label>
       <label>Perfil<select name="perfil_acesso">
         <option value="TATUADOR" ${item.perfil_acesso === "TATUADOR" ? "selected" : ""}>Tatuador</option>
         <option value="ADMINISTRADOR" ${item.perfil_acesso === "ADMINISTRADOR" ? "selected" : ""}>Administrador</option>
@@ -715,7 +723,7 @@ function openStudioEditor(studioId = "") {
       <label>Nome do estúdio<input name="nome_estudio" value="${escapeHtml(item.nome_estudio)}" required></label>
       <label>Nome do responsável<input name="nome_usuario" value="${escapeHtml(item.nome_responsavel || item.nome_usuario)}" required></label>
       <label>Usuário de acesso<input name="login" value="${escapeHtml(item.login)}" autocomplete="off" autocapitalize="none" required></label>
-      <label>${item.id ? "Nova senha (opcional)" : "Senha inicial"}<input name="senha" type="password" minlength="8" autocomplete="new-password" ${item.id ? "" : "required"}></label>
+      <label>${item.id ? "Nova senha (opcional)" : "Senha inicial"}<input name="senha" type="password" minlength="10" autocomplete="new-password" ${item.id ? "" : "required"}></label>
       <label>CNPJ<input name="cnpj" data-cnpj inputmode="numeric" maxlength="18" value="${escapeHtml(item.cnpj)}"></label>
       <label>Endereço<textarea name="endereco">${escapeHtml(item.endereco)}</textarea></label>
       <label>Instagram<input name="instagram" value="${escapeHtml(item.instagram)}"></label>
@@ -1449,8 +1457,8 @@ async function openProfile() {
     <div class="profile-password">
       <h2>Atualizar senha</h2>
       <form id="passwordForm">
-        <label>Nova senha<input name="nova_senha" type="password" minlength="8" autocomplete="new-password" required></label>
-        <label>Repita a nova senha<input name="confirmar_senha" type="password" minlength="8" autocomplete="new-password" required></label>
+        <label>Nova senha<input name="nova_senha" type="password" minlength="10" autocomplete="new-password" required></label>
+        <label>Repita a nova senha<input name="confirmar_senha" type="password" minlength="10" autocomplete="new-password" required></label>
         <button class="primary">Atualizar senha</button>
       </form>
     </div>`;
@@ -2147,6 +2155,7 @@ function showLogin() {
   document.body.classList.remove("authenticated");
   applicationStarted = false;
   sessionUser = null;
+  csrfToken = "";
 }
 
 async function startApplication(user) {
@@ -2155,6 +2164,7 @@ async function startApplication(user) {
     applicationStarted = false;
   }
   sessionUser = user || sessionUser;
+  csrfToken = sessionUser?.csrf_token || "";
   if (sessionUser) {
     $("#studioName").textContent = sessionUser.nome_estudio || "Gestão do estúdio";
     document.title = sessionUser.nome_estudio || "Gestão do estúdio";

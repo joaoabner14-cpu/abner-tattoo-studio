@@ -1,12 +1,22 @@
+function applySecurityHeaders(headers) {
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("x-frame-options", "DENY");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), publickey-credentials-get=(self), publickey-credentials-create=(self)");
+  headers.set("content-security-policy",
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  return headers;
+}
+
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: {
+    headers: applySecurityHeaders(new Headers({
       "content-type": "application/json; charset=utf-8",
       "cache-control": "private, no-store, max-age=0",
       "pragma": "no-cache",
       "vary": "Cookie"
-    }
+    }))
   });
 
 const error = (message, status = 400) => json({ error: message }, status);
@@ -2182,8 +2192,13 @@ async function derivePassword(password, salt, iterations) {
 }
 
 async function passwordCredentials(password) {
-  if (String(password || "").length < 8)
-    throw new Error("A senha deve ter pelo menos 8 caracteres.");
+  const value = String(password || "");
+  if (value.length < 10)
+    throw new Error("A senha deve ter pelo menos 10 caracteres.");
+  if (!/[A-Za-z]/.test(value) || !/\d/.test(value))
+    throw new Error("A senha deve ter letras e nÃºmeros.");
+  if (/^(.)\1+$/.test(value) || ["1234567890", "0123456789"].includes(value))
+    throw new Error("Escolha uma senha menos previsÃ­vel.");
   const iterations = 100000;
   const salt = crypto.getRandomValues(new Uint8Array(32));
   const hash = await derivePassword(String(password), salt, iterations);
@@ -2581,7 +2596,7 @@ async function currentUser(db, request) {
   const row = await db.prepare(`
     SELECT u.id,u.login,u.nome,u.foto_perfil,u.id_estudio,u.papel,
       u.perfil_acesso,u.cor_agenda,
-      e.nome_estudio,e.ativo estudio_ativo,s.id id_sessao,
+      e.nome_estudio,e.ativo estudio_ativo,s.id id_sessao,s.csrf_token,
       COALESCE((SELECT GROUP_CONCAT(em.modulo) FROM estudio_modulos em
         WHERE em.id_estudio=u.id_estudio AND em.habilitado=1),'') modulos
     FROM sessoes s
@@ -2591,30 +2606,42 @@ async function currentUser(db, request) {
       AND s.data_criacao>datetime('now','-24 hours')
       AND u.ativo=1 AND e.ativo=1 LIMIT 1
   `).bind(await sha256(token)).first();
+  if (row && !row.csrf_token) {
+    row.csrf_token = randomToken(32);
+    await db.prepare("UPDATE sessoes SET csrf_token=? WHERE id=?")
+      .bind(row.csrf_token, row.id_sessao).run();
+  }
   return row || null;
 }
 
 async function createSession(db, request, userId) {
   const token = randomToken(32);
+  const csrfToken = randomToken(32);
   await db.prepare(`
-    INSERT INTO sessoes(id_usuario,token_hash,data_expiracao,ip,user_agent)
-    VALUES(?,?,datetime('now','+24 hours'),?,?)
-  `).bind(userId, await sha256(token), request.headers.get("CF-Connecting-IP") || "",
+    INSERT INTO sessoes(id_usuario,token_hash,csrf_token,data_expiracao,ip,user_agent)
+    VALUES(?,?,?,datetime('now','+24 hours'),?,?)
+  `).bind(userId, await sha256(token), csrfToken, request.headers.get("CF-Connecting-IP") || "",
     (request.headers.get("user-agent") || "").slice(0, 500)).run();
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
   return `studio_session=${encodeURIComponent(token)}; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=${SESSION_TTL_SECONDS}`;
 }
 
 const authResponse = (data, status = 200, cookie = null) => {
-  const headers = new Headers({
+  const headers = applySecurityHeaders(new Headers({
     "content-type": "application/json; charset=utf-8",
     "cache-control": "private, no-store, max-age=0",
     "pragma": "no-cache",
     "vary": "Cookie"
-  });
+  }));
   if (cookie) headers.set("set-cookie", cookie);
   return new Response(JSON.stringify(data), { status, headers });
 };
+
+function csrfValid(request, user) {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return true;
+  return Boolean(user?.csrf_token) &&
+    request.headers.get("x-csrf-token") === user.csrf_token;
+}
 
 async function authApi(db, request, url) {
   const path = url.pathname;
@@ -2625,7 +2652,8 @@ async function authApi(db, request, url) {
       id: user.id, login: user.login, nome: user.nome, papel: user.papel,
       perfil_acesso: user.perfil_acesso, cor_agenda: user.cor_agenda,
       id_estudio: user.id_estudio, nome_estudio: user.nome_estudio,
-      modulos: String(user.modulos || "").split(",").filter(Boolean)
+      modulos: String(user.modulos || "").split(",").filter(Boolean),
+      csrf_token: user.csrf_token
     } });
   }
   if (path === "/api/auth/login" && request.method === "POST") {
@@ -2656,6 +2684,7 @@ async function authApi(db, request, url) {
     return authResponse({ ok: true }, 200, await createSession(db, request, account.id));
   }
   if (path === "/api/auth/logout" && request.method === "POST") {
+    if (user && !csrfValid(request, user)) return authResponse({ error: "Token de seguranÃ§a invÃ¡lido." }, 403);
     if (user) await db.prepare("UPDATE sessoes SET revogada=1 WHERE id=?").bind(user.id_sessao).run();
     const secure = url.protocol === "https:" ? "; Secure" : "";
     const response = authResponse({ ok: true }, 200,
@@ -3131,17 +3160,14 @@ async function api(request, env, url, user) {
   if (url.pathname === "/api/perfil/senha" && request.method === "PUT") {
     const data = await body(request);
     const password = String(data.nova_senha || "");
-    if (password.length < 8) return error("A nova senha deve ter pelo menos 8 caracteres.");
     if (password !== String(data.confirmar_senha || "")) {
       return error("As senhas informadas não são iguais.");
     }
-    const iterations = 100000;
-    const salt = crypto.getRandomValues(new Uint8Array(32));
-    const hash = await derivePassword(password, salt, iterations);
+    const credentials = await passwordCredentials(password);
     await db.batch([
       db.prepare(`
         UPDATE usuarios SET senha_salt=?,senha_hash=?,senha_iteracoes=? WHERE id=?
-      `).bind(bytesToBase64(salt), bytesToBase64(hash), iterations, user.id),
+      `).bind(credentials.salt, credentials.hash, credentials.iterations, user.id),
       db.prepare("UPDATE sessoes SET revogada=1 WHERE id_usuario=? AND id<>?")
         .bind(user.id, user.id_sessao)
     ]);
@@ -3313,6 +3339,9 @@ export default {
         if (!["GET", "HEAD"].includes(request.method) && origin && origin !== url.origin) {
           return error("Origem da solicitação não permitida.", 403);
         }
+        if (!csrfValid(request, user)) {
+          return error("Token de seguranca invalido. Atualize a pagina e tente novamente.", 403);
+        }
         const response = await api(request, env, url, user);
         const shouldAudit = !["GET", "HEAD"].includes(request.method) ||
           /\/(?:lgpd\/)?exportar$/.test(url.pathname);
@@ -3335,12 +3364,7 @@ export default {
       if (url.pathname === "/" || /\.(?:html|js|css)$/.test(url.pathname)) {
         headers.set("cache-control", "no-cache, must-revalidate");
       }
-      headers.set("x-content-type-options", "nosniff");
-      headers.set("x-frame-options", "DENY");
-      headers.set("referrer-policy", "no-referrer");
-      headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), publickey-credentials-get=(self), publickey-credentials-create=(self)");
-      headers.set("content-security-policy",
-        "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+      applySecurityHeaders(headers);
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
