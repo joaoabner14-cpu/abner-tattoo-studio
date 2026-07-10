@@ -326,7 +326,7 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
     `).bind(studioId).all();
     const { results: marketing } = await db.prepare(`
       SELECT id,titulo,tipo,status,COALESCE(data_inicio,data_postagem) data_evento,
-        data_fim
+        data_fim,impulsionar,impulsionamento_inicio,impulsionamento_fim
       FROM planejamento_marketing
       WHERE id_estudio=? AND COALESCE(data_inicio,data_postagem) IS NOT NULL
         AND status NOT IN ('Encerrado')
@@ -396,6 +396,25 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
         extendedProps: { tipo: "marketing", id_marketing: item.id }
       };
     });
+    const boostedMarketingEvents = marketing
+      .filter(item => Number(item.impulsionar) === 1 && item.impulsionamento_inicio)
+      .map(item => {
+        const boostEnd = item.impulsionamento_fim &&
+          item.impulsionamento_fim >= item.impulsionamento_inicio
+          ? item.impulsionamento_fim
+          : item.impulsionamento_inicio;
+        return {
+          id: `marketing-boost-${item.id}`,
+          title: `Impulsionado · ${item.titulo}`,
+          start: item.impulsionamento_inicio,
+          end: addDays(boostEnd, 1),
+          allDay: true,
+          backgroundColor: "#c89b3c",
+          borderColor: "#c89b3c",
+          textColor: "#19140a",
+          extendedProps: { tipo: "marketing", id_marketing: item.id, impulsionado: true }
+        };
+      });
     const postSaleEvents = postSales.map(item => ({
       id: `pos-venda-${item.id}`,
       title: `Pos-venda · ${item.dias_apos} dias · ${item.nome}`,
@@ -411,7 +430,10 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
         id_os: item.id_os
       }
     }));
-    return json([...appointments, ...payments, ...marketingEvents, ...postSaleEvents]);
+    return json([
+      ...appointments, ...payments, ...marketingEvents,
+      ...boostedMarketingEvents, ...postSaleEvents
+    ]);
   }
   const today = saoPauloDate();
   const tomorrow = saoPauloDate(1);
