@@ -236,6 +236,7 @@ async function loadFinancialManagement(
       <div class="mei-progress"><span style="width:${limitPercent}%"></span></div><small class="muted">${limitPercent.toFixed(1).replace(".", ",")}% do limite anual. Receitas a prazo devem ser conferidas pelo mês da prestação para o relatório oficial.</small></section>
     <div class="management-actions"><button class="primary" data-management-action="Receita">Registrar receita</button><button class="secondary" data-management-action="Despesa">Registrar despesa</button>
       <button class="secondary" type="button" data-management-initial-balance>Saldo inicial</button>
+      <button class="secondary" type="button" data-management-import-statement>Importar extrato</button>
       <button class="secondary" data-management-action="Conta">Conta a pagar</button><button class="secondary" data-management-action="DAS">Cadastrar DAS</button></div>
     <div class="management-columns"><section><h2>Contas pendentes</h2>${pending}</section><section><h2>Despesas por categoria</h2><div class="card category-list">${categories}</div></section></div>
     <h2>Fluxo de caixa ${managementData.visao === "mensal" ? "do mês" : "do período"}</h2><div class="management-history">${cash}</div>
@@ -386,6 +387,59 @@ function openManagementInitialBalance() {
     await loadFinancialManagement(managementData?.periodo, managementData?.visao,
       managementData?.data_inicio, managementData?.data_fim);
   };
+}
+
+function renderBankImportPreview(data) {
+  const summary = data.resumo || {};
+  const rows = (data.itens || []).map(item => `<tr>
+    <td>${dateBr(item.data)} ${escapeHtml(item.hora || "")}</td>
+    <td>${escapeHtml(item.tipo)}</td>
+    <td>${escapeHtml(item.descricao)}</td>
+    <td>${money(item.valor)}</td>
+    <td>${escapeHtml(item.status_importacao)}${item.erro ? ` · ${escapeHtml(item.erro)}` : ""}</td>
+  </tr>`).join("");
+  return `<div class="card bank-import-summary">
+    <strong>${data.confirmado ? "Importação concluída" : "Prévia da importação"}</strong>
+    <div class="muted">Total: ${summary.total || 0} · Novos: ${summary.novos || 0} · Importados: ${summary.importados || 0} · Duplicados: ${summary.duplicados || 0} · Erros: ${summary.erros || 0}</div>
+  </div>
+  <div class="table-scroll bank-import-preview"><table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Valor</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function openBankStatementImport() {
+  $("#actionContent").innerHTML = `<header><h2>Importar extrato bancário</h2><button class="close" type="button">×</button></header>
+    <form id="bankImportForm">
+      <p class="muted action-help">Use o CSV exportado pelo app do banco. O sistema compara data, tipo e valor para não duplicar lançamentos já existentes no caixa.</p>
+      <label>Arquivo CSV<input name="arquivo" type="file" accept=".csv,text/csv" required></label>
+      <div id="bankImportResult"></div>
+      <div class="finance-actions">
+        <button class="secondary" type="submit">Analisar arquivo</button>
+        <button class="primary" type="button" data-confirm-bank-import hidden>Confirmar importação</button>
+      </div>
+    </form>`;
+  $("#actionDialog").showModal();
+  const form = $("#bankImportForm");
+  const submitImport = async confirm => {
+    const formData = new FormData(form);
+    if (confirm) formData.set("confirmar", "1");
+    const result = await api("/api/financeiro/importar-extrato", {
+      method: "POST",
+      body: formData
+    });
+    $("#bankImportResult").innerHTML = renderBankImportPreview(result);
+    $("[data-confirm-bank-import]").hidden = result.confirmado || !Number(result.resumo?.novos || 0);
+    if (result.confirmado) {
+      toast(`${result.resumo.importados || 0} movimentações importadas.`);
+      await loadFinancialManagement(managementData?.periodo, managementData?.visao,
+        managementData?.data_inicio, managementData?.data_fim);
+      await loadFinance();
+    }
+  };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    await submitImport(false).catch(error => toast(error.message));
+  };
+  $("[data-confirm-bank-import]").onclick = () =>
+    submitImport(true).catch(error => toast(error.message));
 }
 
 function openManagementPayment(trigger) {
@@ -1944,6 +1998,7 @@ document.addEventListener("click", event => {
   const managementAction = event.target.closest("[data-management-action]");
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
   if (event.target.closest("[data-management-initial-balance]")) openManagementInitialBalance();
+  if (event.target.closest("[data-management-import-statement]")) openBankStatementImport();
   const managementPayment = event.target.closest(".pay-management");
   if (managementPayment) openManagementPayment(managementPayment);
   const summary = event.target.closest("[data-summary]");

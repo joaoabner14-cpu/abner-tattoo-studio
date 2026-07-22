@@ -45,6 +45,84 @@ const body = async request => {
   return Object.fromEntries(await request.formData());
 };
 
+function csvLine(line) {
+  const values = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      index++;
+    } else if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) {
+      values.push(current.trim());
+      current = "";
+    } else current += char;
+  }
+  values.push(current.trim());
+  return values;
+}
+
+function csvRows(text) {
+  return String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/)
+    .filter(line => line.trim()).map(csvLine);
+}
+
+const normalizedImportText = value => String(value || "")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/\s+/g, " ").trim().toLowerCase();
+
+function parseBankStatement(text) {
+  const rows = csvRows(text);
+  if (rows.length < 2) return [];
+  const header = rows[0].map(normalizedImportText);
+  const column = names => names.map(normalizedImportText)
+    .map(name => header.indexOf(name)).find(index => index >= 0);
+  const indexes = {
+    date: column(["Data"]),
+    time: column(["Hora"]),
+    transaction: column(["Tipo de transação", "Tipo de transacao"]),
+    name: column(["Nome"]),
+    detail: column(["Detalhe"]),
+    value: column(["Valor"])
+  };
+  if (Object.values(indexes).some(index => index == null)) {
+    throw new Error("O CSV não está no formato esperado do banco.");
+  }
+  return rows.slice(1).map((row, index) => {
+    const date = String(row[indexes.date] || "").slice(0, 10);
+    const rawTime = String(row[indexes.time] || "").trim();
+    const time = /^\d{2}:\d{2}:\d{2}$/.test(rawTime)
+      ? rawTime : /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : "00:00:00";
+    const rawValue = String(row[indexes.value] || "").trim();
+    const signedValue = number(rawValue);
+    const type = signedValue < 0 ? "Saida" : "Entrada";
+    const transaction = String(row[indexes.transaction] || "").trim();
+    const name = String(row[indexes.name] || "").trim();
+    const detail = String(row[indexes.detail] || "").trim();
+    const value = Math.abs(signedValue);
+    const description = [transaction, name, detail].filter(Boolean).join(" - ");
+    return {
+      linha: index + 2,
+      data: date,
+      hora: time,
+      data_movimento: `${date} ${time}`,
+      tipo: type,
+      categoria: "Importação bancária",
+      descricao: description || "Movimentação importada do banco",
+      valor: value,
+      forma_pagamento: normalizedImportText(transaction).includes("pix")
+        ? "Pix" : normalizedImportText(transaction).includes("cartao") ? "Credito" : null,
+      chave_importacao: normalizedImportText([
+        date, time, type, value.toFixed(2), transaction, name, detail
+      ].join("|")),
+      erro: validDate(date) && value > 0 ? "" : "Data ou valor inválido."
+    };
+  });
+}
+
 function saoPauloDate(offsetDays = 0) {
   const now = new Date(Date.now() + offsetDays * 86400000);
   return new Intl.DateTimeFormat("en-CA", {
@@ -1379,6 +1457,89 @@ async function financialManagement(db, request, url, studioId) {
   const periodEndExclusive = addDays(periodEnd, 1);
   const yearStart = `${month.slice(0, 4)}-01-01`;
   const yearEnd = `${Number(month.slice(0, 4)) + 1}-01-01`;
+  if (request.method === "POST" && url.pathname === "/api/financeiro/importar-extrato") {
+    const form = await request.formData();
+    const file = form.get("arquivo");
+    if (!file || typeof file.text !== "function") return error("Selecione o arquivo CSV do banco.");
+    const confirm = String(form.get("confirmar") || "") === "1";
+    const parsed = parseBankStatement(await file.text());
+    if (!parsed.length) return error("Nenhuma movimentação encontrada no arquivo.");
+    const rows = [];
+    const toImport = [];
+    const seenKeys = new Set();
+    for (const item of parsed) {
+      if (item.erro) {
+        rows.push({ ...item, status_importacao: "Erro" });
+        continue;
+      }
+      if (seenKeys.has(item.chave_importacao)) {
+        rows.push({ ...item, status_importacao: "Duplicado" });
+        continue;
+      }
+      seenKeys.add(item.chave_importacao);
+      const alreadyImported = await db.prepare(`
+        SELECT id_caixa FROM extrato_bancario_importacoes
+        WHERE id_estudio=? AND chave_importacao=?
+      `).bind(studioId, item.chave_importacao).first();
+      const existingCash = alreadyImported ? null : await db.prepare(`
+        SELECT id FROM caixa
+        WHERE id_estudio=? AND status='Ativo' AND tipo=? AND valor=?
+          AND substr(data_movimento,1,10)=?
+        LIMIT 1
+      `).bind(studioId, item.tipo, item.valor, item.data).first();
+      if (alreadyImported || existingCash) {
+        rows.push({
+          ...item,
+          status_importacao: "Duplicado",
+          id_caixa: alreadyImported?.id_caixa || existingCash?.id || null
+        });
+        continue;
+      }
+      rows.push({ ...item, status_importacao: confirm ? "Importado" : "Novo" });
+      if (confirm) toImport.push(item);
+    }
+    for (const item of toImport) {
+      const created = await db.prepare(`
+        INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,
+          forma_pagamento)
+        VALUES(?,?,?,?,?,?,?)
+      `).bind(studioId, item.data_movimento, item.tipo, item.categoria,
+        item.descricao, item.valor, item.forma_pagamento).run();
+      await db.prepare(`
+        INSERT INTO extrato_bancario_importacoes(id_estudio,chave_importacao,
+          nome_arquivo,data_movimento,tipo,descricao,valor,id_caixa)
+        VALUES(?,?,?,?,?,?,?,?)
+      `).bind(studioId, item.chave_importacao, String(file.name || "extrato.csv"),
+        item.data_movimento, item.tipo, item.descricao, item.valor,
+        created.meta.last_row_id).run();
+    }
+    const summary = rows.reduce((acc, item) => {
+      const key = item.status_importacao.toLowerCase();
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    return json({
+      ok: true,
+      confirmado: confirm,
+      resumo: {
+        total: rows.length,
+        novos: summary.novo || 0,
+        importados: summary.importado || 0,
+        duplicados: summary.duplicado || 0,
+        erros: summary.erro || 0
+      },
+      itens: rows.slice(0, 200).map(item => ({
+        linha: item.linha,
+        data: item.data,
+        hora: item.hora,
+        tipo: item.tipo,
+        descricao: item.descricao,
+        valor: item.valor,
+        status_importacao: item.status_importacao,
+        erro: item.erro
+      }))
+    });
+  }
   const cashCancellation = url.pathname.match(/^\/api\/financeiro\/caixa\/(\d+)\/cancelar$/);
   if (request.method === "POST" && cashCancellation) {
     const cashId = integer(cashCancellation[1]);
