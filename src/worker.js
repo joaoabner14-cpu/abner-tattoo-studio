@@ -125,6 +125,22 @@ function parseBankStatement(text) {
   });
 }
 
+function applyBankCategoryRules(items, rules) {
+  return items.map(item => {
+    if (item.erro) return item;
+    const haystack = normalizedImportText(item.descricao);
+    const rule = rules.find(candidate =>
+      ["Ambos", item.tipo].includes(candidate.tipo) &&
+      haystack.includes(normalizedImportText(candidate.palavra_chave))
+    );
+    return rule ? {
+      ...item,
+      categoria: rule.categoria,
+      id_regra_categoria: rule.id
+    } : item;
+  });
+}
+
 function saoPauloDate(offsetDays = 0) {
   const now = new Date(Date.now() + offsetDays * 86400000);
   return new Intl.DateTimeFormat("en-CA", {
@@ -1459,12 +1475,64 @@ async function financialManagement(db, request, url, studioId) {
   const periodEndExclusive = addDays(periodEnd, 1);
   const yearStart = `${month.slice(0, 4)}-01-01`;
   const yearEnd = `${Number(month.slice(0, 4)) + 1}-01-01`;
+  if (url.pathname === "/api/financeiro/regras-extrato") {
+    if (request.method === "GET") {
+      const { results } = await db.prepare(`
+        SELECT id,palavra_chave,tipo,categoria,ativo
+        FROM extrato_categoria_regras
+        WHERE id_estudio=? AND ativo=1
+        ORDER BY tipo,palavra_chave COLLATE NOCASE
+      `).bind(studioId).all();
+      return json(results);
+    }
+    if (request.method === "POST") {
+      const data = await body(request);
+      const type = ["Entrada", "Saida", "Ambos"].includes(data.tipo) ? data.tipo : "Ambos";
+      const keyword = required(data.palavra_chave, "palavra-chave");
+      const category = required(data.categoria, "categoria");
+      const created = await db.prepare(`
+        INSERT INTO extrato_categoria_regras(id_estudio,palavra_chave,tipo,categoria)
+        VALUES(?,?,?,?)
+      `).bind(studioId, keyword, type, category).run();
+      return json({ ok: true, id: created.meta.last_row_id }, 201);
+    }
+  }
+  const ruleMatch = url.pathname.match(/^\/api\/financeiro\/regras-extrato\/(\d+)$/);
+  if (ruleMatch) {
+    const ruleId = integer(ruleMatch[1]);
+    if (request.method === "PUT") {
+      const data = await body(request);
+      const type = ["Entrada", "Saida", "Ambos"].includes(data.tipo) ? data.tipo : "Ambos";
+      const updated = await db.prepare(`
+        UPDATE extrato_categoria_regras
+        SET palavra_chave=?,tipo=?,categoria=?
+        WHERE id=? AND id_estudio=?
+      `).bind(required(data.palavra_chave, "palavra-chave"), type,
+        required(data.categoria, "categoria"), ruleId, studioId).run();
+      if (!updated.meta.changes) return error("Regra não encontrada.", 404);
+      return json({ ok: true });
+    }
+    if (request.method === "DELETE") {
+      const updated = await db.prepare(`
+        UPDATE extrato_categoria_regras SET ativo=0
+        WHERE id=? AND id_estudio=?
+      `).bind(ruleId, studioId).run();
+      if (!updated.meta.changes) return error("Regra não encontrada.", 404);
+      return json({ ok: true });
+    }
+  }
   if (request.method === "POST" && url.pathname === "/api/financeiro/importar-extrato") {
     const form = await request.formData();
     const file = form.get("arquivo");
     if (!file || typeof file.text !== "function") return error("Selecione o arquivo CSV do banco.");
     const confirm = String(form.get("confirmar") || "") === "1";
-    const parsed = parseBankStatement(await file.text());
+    const { results: rules } = await db.prepare(`
+      SELECT id,palavra_chave,tipo,categoria
+      FROM extrato_categoria_regras
+      WHERE id_estudio=? AND ativo=1
+      ORDER BY length(palavra_chave) DESC,id
+    `).bind(studioId).all();
+    const parsed = applyBankCategoryRules(parseBankStatement(await file.text()), rules);
     if (!parsed.length) return error("Nenhuma movimentação encontrada no arquivo.");
     const rows = [];
     const toImport = [];
@@ -1537,6 +1605,7 @@ async function financialManagement(db, request, url, studioId) {
         tipo: item.tipo,
         descricao: item.descricao,
         valor: item.valor,
+        categoria: item.categoria,
         status_importacao: item.status_importacao,
         erro: item.erro
       }))

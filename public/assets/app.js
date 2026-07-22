@@ -237,6 +237,7 @@ async function loadFinancialManagement(
     <div class="management-actions"><button class="primary" data-management-action="Receita">Registrar receita</button><button class="secondary" data-management-action="Despesa">Registrar despesa</button>
       <button class="secondary" type="button" data-management-initial-balance>Saldo inicial</button>
       <button class="secondary" type="button" data-management-import-statement>Importar extrato</button>
+      <button class="secondary" type="button" data-management-bank-rules>Regras do extrato</button>
       <button class="secondary" data-management-action="Conta">Conta a pagar</button><button class="secondary" data-management-action="DAS">Cadastrar DAS</button></div>
     <div class="management-columns"><section><h2>Contas pendentes</h2>${pending}</section><section><h2>Despesas por categoria</h2><div class="card category-list">${categories}</div></section></div>
     <h2>Fluxo de caixa ${managementData.visao === "mensal" ? "do mês" : "do período"}</h2><div class="management-history">${cash}</div>
@@ -395,6 +396,7 @@ function renderBankImportPreview(data) {
     <td>${dateBr(item.data)} ${escapeHtml(item.hora || "")}</td>
     <td>${escapeHtml(item.tipo)}</td>
     <td>${escapeHtml(item.descricao)}</td>
+    <td>${escapeHtml(item.categoria || "Importação bancária")}</td>
     <td>${money(item.valor)}</td>
     <td>${item.status_importacao === "Duplicado" ? "Ignorado · duplicado" : escapeHtml(item.status_importacao)}${item.erro ? ` · ${escapeHtml(item.erro)}` : ""}</td>
   </tr>`).join("");
@@ -402,7 +404,38 @@ function renderBankImportPreview(data) {
     <strong>${data.confirmado ? "Importação concluída" : "Prévia da importação"}</strong>
     <div class="muted">Total: ${summary.total || 0} · Novos: ${summary.novos || 0} · Importados: ${summary.importados || 0} · Duplicados: ${summary.duplicados || 0} · Erros: ${summary.erros || 0}</div>
   </div>
-  <div class="table-scroll bank-import-preview"><table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Valor</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  <div class="table-scroll bank-import-preview"><table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function openBankCategoryRules() {
+  const rules = await api("/api/financeiro/regras-extrato");
+  const categories = ["Serviços", "Materiais", "Alimentação", "Marketing", "Impostos",
+    "Taxas", "Equipamentos", "Manutenção", "Retirada", "Transferência",
+    "Outras receitas", "Outras despesas"];
+  const rows = rules.map(rule => `<article class="summary-detail-item">
+    <div><strong>${escapeHtml(rule.palavra_chave)}</strong><small>${escapeHtml(rule.tipo)} → ${escapeHtml(rule.categoria)}</small></div>
+    <div class="summary-detail-actions">
+      <button class="danger remove-bank-rule" type="button" data-id="${rule.id}">Remover</button>
+    </div>
+  </article>`).join("") || `<div class="card muted">Nenhuma regra cadastrada.</div>`;
+  $("#actionContent").innerHTML = `<header><h2>Regras do extrato</h2><button class="close" type="button">×</button></header>
+    <p class="muted action-help">Ao importar o CSV, o sistema procura a palavra-chave na descrição do lançamento e aplica a categoria definida.</p>
+    <form id="bankRuleForm" class="card">
+      <label>Palavra-chave<input name="palavra_chave" placeholder="Ex.: MINISTERIO DA FAZENDA" required></label>
+      <div class="fields">
+        <label>Tipo<select name="tipo"><option>Ambos</option><option>Entrada</option><option>Saida</option></select></label>
+        <label>Categoria<select name="categoria">${categories.map(category => `<option>${category}</option>`).join("")}</select></label>
+      </div>
+      <button class="primary">Adicionar regra</button>
+    </form>
+    <div class="summary-detail-list">${rows}</div>`;
+  $("#actionDialog").showModal();
+  $("#bankRuleForm").onsubmit = async event => {
+    event.preventDefault();
+    await send("/api/financeiro/regras-extrato", "POST", event.currentTarget);
+    toast("Regra adicionada.");
+    await openBankCategoryRules();
+  };
 }
 
 function openBankStatementImport() {
@@ -1999,6 +2032,13 @@ document.addEventListener("click", event => {
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
   if (event.target.closest("[data-management-initial-balance]")) openManagementInitialBalance();
   if (event.target.closest("[data-management-import-statement]")) openBankStatementImport();
+  if (event.target.closest("[data-management-bank-rules]")) openBankCategoryRules().catch(error => toast(error.message));
+  const removeBankRule = event.target.closest(".remove-bank-rule");
+  if (removeBankRule && confirm("Remover esta regra de categorização?")) {
+    api(`/api/financeiro/regras-extrato/${removeBankRule.dataset.id}`, { method: "DELETE" })
+      .then(() => openBankCategoryRules())
+      .catch(error => toast(error.message));
+  }
   const managementPayment = event.target.closest(".pay-management");
   if (managementPayment) openManagementPayment(managementPayment);
   const summary = event.target.closest("[data-summary]");
