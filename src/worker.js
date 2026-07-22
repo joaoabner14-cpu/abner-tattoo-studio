@@ -104,6 +104,7 @@ function parseBankStatement(text) {
     const detail = String(row[indexes.detail] || "").trim();
     const value = Math.abs(signedValue);
     const description = [transaction, name, detail].filter(Boolean).join(" - ");
+    const reconciliationKey = `${date.slice(0, 7)}|${type}|${value.toFixed(2)}`;
     return {
       linha: index + 2,
       data: date,
@@ -118,6 +119,7 @@ function parseBankStatement(text) {
       chave_importacao: normalizedImportText([
         date, time, type, value.toFixed(2), transaction, name, detail
       ].join("|")),
+      chave_conciliacao: reconciliationKey,
       erro: validDate(date) && value > 0 ? "" : "Data ou valor inválido."
     };
   });
@@ -1479,14 +1481,14 @@ async function financialManagement(db, request, url, studioId) {
       seenKeys.add(item.chave_importacao);
       const alreadyImported = await db.prepare(`
         SELECT id_caixa FROM extrato_bancario_importacoes
-        WHERE id_estudio=? AND chave_importacao=?
-      `).bind(studioId, item.chave_importacao).first();
+        WHERE id_estudio=? AND (chave_importacao=? OR chave_conciliacao=?)
+      `).bind(studioId, item.chave_importacao, item.chave_conciliacao).first();
       const existingCash = alreadyImported ? null : await db.prepare(`
         SELECT id FROM caixa
         WHERE id_estudio=? AND status='Ativo' AND tipo=? AND valor=?
-          AND substr(data_movimento,1,10)=?
+          AND substr(data_movimento,1,7)=?
         LIMIT 1
-      `).bind(studioId, item.tipo, item.valor, item.data).first();
+      `).bind(studioId, item.tipo, item.valor, item.data.slice(0, 7)).first();
       if (alreadyImported || existingCash) {
         rows.push({
           ...item,
@@ -1507,11 +1509,11 @@ async function financialManagement(db, request, url, studioId) {
         item.descricao, item.valor, item.forma_pagamento).run();
       await db.prepare(`
         INSERT INTO extrato_bancario_importacoes(id_estudio,chave_importacao,
-          nome_arquivo,data_movimento,tipo,descricao,valor,id_caixa)
-        VALUES(?,?,?,?,?,?,?,?)
-      `).bind(studioId, item.chave_importacao, String(file.name || "extrato.csv"),
-        item.data_movimento, item.tipo, item.descricao, item.valor,
-        created.meta.last_row_id).run();
+          chave_conciliacao,nome_arquivo,data_movimento,tipo,descricao,valor,id_caixa)
+        VALUES(?,?,?,?,?,?,?,?,?)
+      `).bind(studioId, item.chave_importacao, item.chave_conciliacao,
+        String(file.name || "extrato.csv"), item.data_movimento, item.tipo,
+        item.descricao, item.valor, created.meta.last_row_id).run();
     }
     const summary = rows.reduce((acc, item) => {
       const key = item.status_importacao.toLowerCase();

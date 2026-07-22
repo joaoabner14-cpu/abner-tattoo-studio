@@ -396,7 +396,7 @@ function renderBankImportPreview(data) {
     <td>${escapeHtml(item.tipo)}</td>
     <td>${escapeHtml(item.descricao)}</td>
     <td>${money(item.valor)}</td>
-    <td>${escapeHtml(item.status_importacao)}${item.erro ? ` · ${escapeHtml(item.erro)}` : ""}</td>
+    <td>${item.status_importacao === "Duplicado" ? "Ignorado · duplicado" : escapeHtml(item.status_importacao)}${item.erro ? ` · ${escapeHtml(item.erro)}` : ""}</td>
   </tr>`).join("");
   return `<div class="card bank-import-summary">
     <strong>${data.confirmado ? "Importação concluída" : "Prévia da importação"}</strong>
