@@ -2041,12 +2041,16 @@ document.addEventListener("input", event => {
 
 document.addEventListener("pointerdown", event => {
   const item = event.target.closest(".notification-item,.swipe-action-item");
-  if (!item || event.target.closest(".notification-actions,.swipe-actions")) return;
+  if (!item) return;
   const actions = $(".notification-actions,.swipe-actions", item);
   if (!actions) return;
-  closeNotificationSwipes(item);
-  const width = Math.max(108, actions.offsetWidth || 108);
   const wasOpen = item.classList.contains("is-swiped");
+  if (!wasOpen && event.target.closest(".notification-actions,.swipe-actions")) return;
+  closeNotificationSwipes(item);
+  const actionItems = [...actions.children];
+  const width = Math.max(108,
+    actionItems.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0),
+    actions.offsetWidth || 0);
   item.style.setProperty("--swipe-width", `${width}px`);
   notificationSwipe = {
     item,
@@ -2058,6 +2062,7 @@ document.addEventListener("pointerdown", event => {
     dx: 0,
     locked: "",
     active: true,
+    startedOnActions: Boolean(event.target.closest(".notification-actions,.swipe-actions")),
     pointerId: event.pointerId
   };
   item.classList.add("is-swiping");
@@ -2090,6 +2095,10 @@ document.addEventListener("pointerup", event => {
   const { item, dx, startOffset, width } = notificationSwipe;
   item.classList.remove("is-swiping");
   item.dataset.swipeSuppress = Math.abs(dx) > 8 ? "1" : "";
+  if (notificationSwipe.startedOnActions && Math.abs(dx) > 8) {
+    item.dataset.actionSwipeSuppress = "1";
+    setTimeout(() => { delete item.dataset.actionSwipeSuppress; }, 220);
+  }
   setTimeout(() => { delete item.dataset.swipeSuppress; }, 180);
   const limit = width;
   const finalOffset = Math.max(-limit, Math.min(0, startOffset + dx));
@@ -2112,6 +2121,12 @@ document.addEventListener("pointercancel", () => {
 });
 
 document.addEventListener("click", event => {
+  const suppressedSwipeAction = event.target.closest(".notification-item,.swipe-action-item");
+  if (suppressedSwipeAction?.dataset.actionSwipeSuppress === "1") {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (!event.target.closest(".notification-item,.swipe-action-item")) closeNotificationSwipes();
   const nav = event.target.closest(".nav-link");
   if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") loadFinancialManagement(); if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "privacidade") loadPrivacyDashboard().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
