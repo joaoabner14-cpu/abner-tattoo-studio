@@ -2072,8 +2072,7 @@ document.addEventListener("pointerdown", event => {
   if (wasOpen && event.cancelable) event.preventDefault();
   const actionItems = [...actions.children];
   const width = Math.max(108,
-    actionItems.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0),
-    actions.offsetWidth || 0);
+    actionItems.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0));
   item.style.setProperty("--swipe-width", `${width}px`);
   notificationSwipe = {
     item,
