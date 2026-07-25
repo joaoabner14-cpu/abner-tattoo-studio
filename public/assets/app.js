@@ -2045,9 +2045,14 @@ document.addEventListener("pointerdown", event => {
   const actions = $(".notification-actions,.swipe-actions", item);
   if (!actions) return;
   closeNotificationSwipes(item);
+  const width = Math.max(108, actions.offsetWidth || 108);
+  const wasOpen = item.classList.contains("is-swiped");
+  item.style.setProperty("--swipe-width", `${width}px`);
   notificationSwipe = {
     item,
     actions,
+    width,
+    startOffset: wasOpen ? -width : 0,
     startX: event.clientX,
     startY: event.clientY,
     dx: 0,
@@ -2075,20 +2080,21 @@ document.addEventListener("pointermove", event => {
   if (notificationSwipe.locked !== "x") return;
   if (event.cancelable) event.preventDefault();
   notificationSwipe.dx = dx;
-  const limit = Math.max(108, notificationSwipe.actions.offsetWidth || 108);
-  const translate = Math.max(-limit, Math.min(0, dx));
+  const limit = notificationSwipe.width;
+  const translate = Math.max(-limit, Math.min(0, notificationSwipe.startOffset + dx));
   $(".notification-main,.swipe-main", notificationSwipe.item).style.transform = `translateX(${translate}px)`;
 }, { passive: false });
 
 document.addEventListener("pointerup", event => {
   if (!notificationSwipe || event.pointerId !== notificationSwipe.pointerId) return;
-  const { item, dx } = notificationSwipe;
+  const { item, dx, startOffset, width } = notificationSwipe;
   item.classList.remove("is-swiping");
   item.dataset.swipeSuppress = Math.abs(dx) > 8 ? "1" : "";
   setTimeout(() => { delete item.dataset.swipeSuppress; }, 180);
-  const limit = Math.max(108, notificationSwipe.actions.offsetWidth || 108);
+  const limit = width;
+  const finalOffset = Math.max(-limit, Math.min(0, startOffset + dx));
   item.style.setProperty("--swipe-width", `${limit}px`);
-  if (dx <= -48) {
+  if (finalOffset <= -limit / 2) {
     item.classList.add("is-swiped");
     $(".notification-main,.swipe-main", item).style.removeProperty("transform");
   } else {
