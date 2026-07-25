@@ -2051,6 +2051,7 @@ document.addEventListener("pointerdown", event => {
     startX: event.clientX,
     startY: event.clientY,
     dx: 0,
+    locked: "",
     active: true,
     pointerId: event.pointerId
   };
@@ -2062,18 +2063,22 @@ document.addEventListener("pointermove", event => {
   if (!notificationSwipe?.active || event.pointerId !== notificationSwipe.pointerId) return;
   const dx = event.clientX - notificationSwipe.startX;
   const dy = event.clientY - notificationSwipe.startY;
-  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
-    notificationSwipe.active = false;
-    notificationSwipe.item.classList.remove("is-swiping");
-    $(".notification-main", notificationSwipe.item)?.style.removeProperty("transform");
-    return;
+  if (!notificationSwipe.locked && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+    notificationSwipe.locked = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    if (notificationSwipe.locked === "y") {
+      notificationSwipe.active = false;
+      notificationSwipe.item.classList.remove("is-swiping");
+      $(".notification-main,.swipe-main", notificationSwipe.item)?.style.removeProperty("transform");
+      return;
+    }
   }
-  if (Math.abs(dx) < 6) return;
+  if (notificationSwipe.locked !== "x") return;
+  if (event.cancelable) event.preventDefault();
   notificationSwipe.dx = dx;
   const limit = Math.max(108, notificationSwipe.actions.offsetWidth || 108);
   const translate = Math.max(-limit, Math.min(0, dx));
   $(".notification-main,.swipe-main", notificationSwipe.item).style.transform = `translateX(${translate}px)`;
-});
+}, { passive: false });
 
 document.addEventListener("pointerup", event => {
   if (!notificationSwipe || event.pointerId !== notificationSwipe.pointerId) return;
