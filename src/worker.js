@@ -582,7 +582,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
       tipo: "agenda_1h",
       titulo: "Sessao em breve",
       mensagem: `${brDateTime(item.data_hora)} - ${item.nome}`,
-      url: "/#agenda",
+      url: "/?notificacao=agenda_1h#agenda",
       urgency: "high"
     }));
   }
@@ -600,7 +600,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
       titulo: `${results.length} sessao(oes) amanha`,
       mensagem: results.slice(0, 3).map(item =>
         `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
-      url: "/#agenda"
+      url: "/?notificacao=agenda_amanha#agenda"
     });
     const unconfirmed = results.filter(item => item.status === "Agendado");
     if (unconfirmed.length) alerts.push({
@@ -609,7 +609,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
       titulo: `${unconfirmed.length} confirmacao(oes) pendente(s)`,
       mensagem: unconfirmed.slice(0, 3).map(item =>
         `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
-      url: "/#agenda",
+      url: "/?notificacao=confirmacao_pendente#agenda",
       urgency: "high"
     });
     return alerts;
@@ -621,7 +621,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     titulo: `${summary.agendamentos_hoje.length} sessao(oes) hoje`,
     mensagem: summary.agendamentos_hoje.slice(0, 3).map(item =>
       `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
-    url: "/#agenda",
+    url: "/?notificacao=agenda_hoje#agenda",
     urgency: "high"
   });
   const { results: pendingSignals } = await db.prepare(`
@@ -641,7 +641,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     titulo: `${pendingSignals.length} sinal(is) pendente(s)`,
     mensagem: pendingSignals.slice(0, 3).map(item =>
       `${brDateTime(item.data_hora)} - ${item.nome} - ${moneyText(item.valor_sinal)}`).join("\n"),
-    url: "/#financeiro",
+    url: "/?notificacao=sinal_pendente#financeiro",
     urgency: "high"
   });
   if (summary.parcelas_atrasadas?.length) alerts.push({
@@ -649,7 +649,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     tipo: "crediario_vencido",
     titulo: `${summary.parcelas_atrasadas.length} parcela(s) atrasada(s)`,
     mensagem: `Total em atraso: ${moneyText(summary.total_atrasado || 0)}`,
-    url: "/#financeiro",
+    url: "/?notificacao=crediario_vencido#financeiro",
     urgency: "high"
   });
   const { results: bills } = await db.prepare(`
@@ -664,7 +664,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     mensagem: bills.slice(0, 3).map(item =>
       `${item.data_vencimento < date ? "Vencida" : "Vence hoje"} - ${item.descricao} - ${moneyText(item.valor)}`
     ).join("\n"),
-    url: "/#financeiro",
+    url: "/?notificacao=contas_abertas#financeiro",
     urgency: bills.some(item => item.data_vencimento < date) ? "high" : "normal"
   });
   const { results: postSales } = await db.prepare(`
@@ -679,7 +679,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     titulo: `${postSales.length} pos-venda pendente(s)`,
     mensagem: postSales.slice(0, 3).map(item =>
       `${item.dias_apos} dias - OS #${item.id_os} - ${item.nome}`).join("\n"),
-    url: "/#agenda"
+    url: "/?notificacao=pos_venda#agenda"
   });
   const { results: marketing } = await db.prepare(`
     SELECT id,titulo,COALESCE(data_postagem,data_inicio) data_acao
@@ -694,7 +694,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     titulo: `${marketing.length} acao(oes) de marketing`,
     mensagem: marketing.slice(0, 3).map(item =>
       `${dateBr(item.data_acao)} - ${item.titulo}`).join("\n"),
-    url: "/#marketing"
+    url: "/?notificacao=marketing#marketing"
   });
   return alerts;
 }
@@ -3637,6 +3637,82 @@ async function api(request, env, url, user) {
     `).bind(id, studioId, user.id).run();
     if (!result.meta.changes) return error("Notificacao nao encontrada.", 404);
     return json({ ok: true });
+  }
+  if (url.pathname === "/api/notificacoes/pendencias" && request.method === "GET") {
+    const type = url.searchParams.get("tipo") || "";
+    const today = saoPauloDate();
+    const tomorrow = addDays(today, 1);
+    if (type === "crediario_vencido" || type === "sinal_pendente") {
+      const response = await dashboard(db, studioId);
+      const data = await response.json();
+      return json({
+        tipo: type,
+        itens: type === "crediario_vencido" ? data.parcelas_atrasadas : data.sinais_pendentes
+      });
+    }
+    if (["agenda_hoje", "agenda_amanha", "agenda_1h", "confirmacao_pendente"].includes(type)) {
+      const targetDate = type === "agenda_amanha" || type === "confirmacao_pendente" ? tomorrow : today;
+      const now = saoPauloDateTime();
+      const soon = saoPauloDateTime(new Date(Date.now() + 90 * 60 * 1000));
+      const useSoon = type === "agenda_1h";
+      const onlyUnconfirmed = type === "confirmacao_pendente";
+      const { results } = await db.prepare(`
+        SELECT a.id id_agendamento,a.data_hora,a.status,c.nome,c.telefone,
+          u.nome tatuador
+        FROM agendamentos a
+        JOIN clientes c ON c.id=a.id_cliente
+        LEFT JOIN usuarios u ON u.id=a.id_tatuador AND u.id_estudio=a.id_estudio
+        WHERE a.id_estudio=?
+          AND ((?=1 AND a.data_hora>=? AND a.data_hora<?) OR (?=0 AND substr(a.data_hora,1,10)=?))
+          AND (?=0 OR a.status='Agendado')
+          AND lower(a.status) NOT IN ('cancelado','concluido')
+        ORDER BY a.data_hora
+      `).bind(studioId, useSoon ? 1 : 0, now, soon, useSoon ? 1 : 0,
+        targetDate, onlyUnconfirmed ? 1 : 0).all();
+      return json({
+        tipo: type,
+        itens: results.map(item => {
+          const message = encodeURIComponent(
+            `Olá, ${item.nome}, tudo bem?\n\nVocê possui uma sessão de tatuagem agendada para *${brDateTime(item.data_hora)}*.\n\nConfirme sua presença respondendo SIM.`
+          );
+          return {
+            ...item,
+            data_agendamento: brDateTime(item.data_hora),
+            link_whatsapp: `https://wa.me/${whatsappPhone(item.telefone)}?text=${message}`
+          };
+        })
+      });
+    }
+    if (type === "pos_venda") {
+      const { results } = await db.prepare(`
+        SELECT pv.id,pv.dias_apos,pv.data_tarefa,pv.id_os,c.nome
+        FROM pos_venda_tarefas pv JOIN clientes c ON c.id=pv.id_cliente
+        WHERE pv.id_estudio=? AND pv.status='Pendente' AND pv.data_tarefa<=?
+        ORDER BY pv.data_tarefa
+      `).bind(studioId, today).all();
+      return json({ tipo: type, itens: results });
+    }
+    if (type === "contas_abertas") {
+      const { results } = await db.prepare(`
+        SELECT id,descricao,tipo,categoria,valor,data_vencimento
+        FROM gestao_financeira
+        WHERE id_estudio=? AND status='Pendente' AND data_vencimento<=?
+        ORDER BY data_vencimento,valor DESC
+      `).bind(studioId, today).all();
+      return json({ tipo: type, itens: results });
+    }
+    if (type === "marketing") {
+      if (!enabledModules.has("marketing")) return error("Este módulo não está habilitado para o estúdio.", 403);
+      const { results } = await db.prepare(`
+        SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_acao
+        FROM planejamento_marketing
+        WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio)<=?
+          AND status NOT IN ('Publicado','Encerrado')
+        ORDER BY data_acao,id
+      `).bind(studioId, today).all();
+      return json({ tipo: type, itens: results });
+    }
+    return json({ tipo: type, itens: [] });
   }
   if (url.pathname === "/api/notificacoes" && request.method === "GET") {
     const today = saoPauloDate();

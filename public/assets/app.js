@@ -509,6 +509,7 @@ function openBankStatementImport() {
 }
 
 function openManagementPayment(trigger) {
+  if ($("#actionDialog").open) $("#actionDialog").close();
   $("#actionContent").innerHTML = `<header><h2>Dar baixa</h2><button class="close" type="button">×</button></header>
     <form id="managementPaymentForm"><label>Valor<input value="${moneyInput(trigger.dataset.value)}" readonly></label>
       <label>Data do pagamento<input name="data_pagamento" type="date" value="${todaySp()}" required></label>
@@ -644,6 +645,75 @@ function openAppUrl(url = "") {
   if (nav && !nav.hidden) nav.click();
 }
 
+function notificationTypeFromUrl(url = "") {
+  try {
+    return new URL(String(url || "/"), location.origin).searchParams.get("notificacao") || "";
+  } catch {
+    return "";
+  }
+}
+
+async function openNotificationResolver(typeOrUrl = "") {
+  const type = String(typeOrUrl).includes("notificacao=")
+    ? notificationTypeFromUrl(typeOrUrl)
+    : String(typeOrUrl || "");
+  if (!type) return openAppUrl(typeOrUrl);
+  const targetPage = ["crediario_vencido", "sinal_pendente", "contas_abertas"].includes(type)
+    ? "financeiro" : type === "marketing" ? "marketing" : "agenda";
+  openAppUrl(`/#${targetPage}`);
+  const data = await api(`/api/notificacoes/pendencias?tipo=${encodeURIComponent(type)}`);
+  const titles = {
+    agenda_hoje: "Agendamentos de hoje",
+    agenda_amanha: "Agendamentos de amanhã",
+    agenda_1h: "Sessões em breve",
+    confirmacao_pendente: "Confirmações pendentes",
+    sinal_pendente: "Sinais pendentes",
+    crediario_vencido: "Parcelas atrasadas",
+    contas_abertas: "Contas em aberto",
+    pos_venda: "Pós-venda pendente",
+    marketing: "Ações de marketing"
+  };
+  const items = data.itens || [];
+  let rows = "";
+  if (type === "crediario_vencido") {
+    rows = items.map(x => `<article class="card overdue-card">
+      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>
+      <div class="card-actions"><a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button></div>
+    </article>`).join("");
+  } else if (type === "sinal_pendente") {
+    rows = items.map(x => `<article class="card card-head">
+      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${money(x.valor)}</div></div>
+      <button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button>
+    </article>`).join("");
+  } else if (["agenda_hoje", "agenda_amanha", "agenda_1h", "confirmacao_pendente"].includes(type)) {
+    rows = items.map(x => `<article class="card card-head">
+      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${escapeHtml(x.status)}${x.tatuador ? ` · ${escapeHtml(x.tatuador)}` : ""}</div></div>
+      <div class="card-actions"><button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<a class="primary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Confirmar</a>` : ""}</div>
+    </article>`).join("");
+  } else if (type === "pos_venda") {
+    rows = items.map(x => `<article class="card card-head">
+      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.dias_apos} dias · OS #${x.id_os} · tarefa para ${dateBr(x.data_tarefa)}</div></div>
+      <button class="primary" data-open-post-sale="${x.id}">Resolver</button>
+    </article>`).join("");
+  } else if (type === "contas_abertas") {
+    rows = items.map(x => `<article class="card management-pending ${x.data_vencimento < todaySp() ? "is-overdue" : ""}">
+      <div><strong>${escapeHtml(x.descricao)}</strong><div class="muted">${escapeHtml(x.tipo)} · ${escapeHtml(x.categoria)} · vence ${dateBr(x.data_vencimento)}</div></div>
+      <div><strong>${money(x.valor)}</strong><button class="primary pay-management" data-id="${x.id}" data-value="${x.valor}">Dar baixa</button></div>
+    </article>`).join("");
+  } else if (type === "marketing") {
+    rows = items.map(x => `<article class="card card-head">
+      <div><strong>${escapeHtml(x.titulo)}</strong><div class="muted">${escapeHtml(x.tipo)} · ${escapeHtml(x.status)} · ${dateBr(x.data_acao)}</div></div>
+      <button class="primary" data-marketing-action="edit" data-id="${x.id}">Abrir</button>
+    </article>`).join("");
+  }
+  if (!rows) rows = `<div class="card muted">Nenhuma pendência encontrada para este alerta.</div>`;
+  const dialog = $("#actionDialog");
+  if (dialog.open) dialog.close();
+  $("#actionContent").innerHTML = `<header><h2>${titles[type] || "Alerta"}</h2><button class="close" type="button">X</button></header>
+    <div class="notification-resolution-list">${rows}</div>`;
+  dialog.showModal();
+}
+
 async function loadNotifications() {
   const data = await api("/api/notificacoes");
   notificationsData = Array.isArray(data) ? data : data.itens || [];
@@ -666,7 +736,7 @@ function openNotifications() {
   </label>`).join("");
   const rows = notificationsData.map(item => {
     const storedId = /^\d+$/.test(String(item.id || "")) ? item.id : "";
-    return `<article class="notification-item ${Number(item.lida) ? "is-read" : ""}" data-notification-id="${storedId}" data-notification-url="${escapeHtml(item.url || "")}" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
+    return `<article class="notification-item ${Number(item.lida) ? "is-read" : ""}" data-notification-id="${storedId}" data-notification-type="${escapeHtml(item.tipo || "")}" data-notification-url="${escapeHtml(item.url || "")}" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
       <button class="notification-main" type="button">
         <span class="notification-icon">${Number(item.lida) ? "✓" : item.dias < 0 ? "!" : item.tipo === "marketing" ? "*" : "-"}</span>
         <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} - ${dateBr(item.data)}</small></span>
@@ -1811,6 +1881,7 @@ async function openInkRecipeAction() {
 function openInstallmentPayment(trigger) {
   const orderWasOpen = $("#orderDialog").open;
   const number = trigger.dataset.number || "";
+  if ($("#actionDialog").open) $("#actionDialog").close();
   $("#actionContent").innerHTML = `<header><h2>Receber parcela${number ? ` ${number}` : ""}</h2><button class="close" type="button">×</button></header>
     <form id="installmentPaymentForm"><label>Valor<input value="${moneyInput(trigger.dataset.value)}" readonly></label>
     <label>Forma<input value="Pix" readonly></label>
@@ -1982,6 +2053,7 @@ document.addEventListener("click", event => {
   if (signal) {
     api(`/api/os?id=${signal.dataset.id}`).then(data => {
       activeOrderData = data;
+      if ($("#actionDialog").open) $("#actionDialog").close();
       openFinanceAction("payment", {
         tipo: "Sinal", valor: signal.dataset.value, forma_pagamento: "Pix",
         data_pagamento: todaySp(), observacao: "SINAL"
@@ -1992,6 +2064,11 @@ document.addEventListener("click", event => {
   if (financeAction) openFinanceAction(financeAction.dataset.financeAction);
   const serviceAction = event.target.closest("[data-service-action]");
   if (serviceAction) openServiceAction(serviceAction.dataset.serviceAction);
+  const postSaleOpen = event.target.closest("[data-open-post-sale]");
+  if (postSaleOpen) {
+    $("#actionDialog").close();
+    openPostSaleTask(postSaleOpen.dataset.openPostSale).catch(error => toast(error.message));
+  }
   const completePostSale = event.target.closest(".complete-post-sale");
   if (completePostSale) {
     post(`/api/pos-venda/${completePostSale.dataset.id}/concluir`)
@@ -2099,7 +2176,8 @@ document.addEventListener("click", event => {
     if (notification.dataset.notificationPlan) {
       openMarketingRecord(notification.dataset.notificationPlan);
     } else {
-      openAppUrl(notification.dataset.notificationUrl);
+      openNotificationResolver(notification.dataset.notificationType || notification.dataset.notificationUrl)
+        .catch(error => toast(error.message));
     }
   }
   const resolveNotification = event.target.closest("[data-resolve-notification]");
@@ -2400,6 +2478,11 @@ async function startApplication(user) {
   } catch {}
   if ($("#agenda").classList.contains("active")) {
     showAgenda().catch(error => toast(error.message));
+  }
+  const notificationAction = new URL(location.href).searchParams.get("notificacao");
+  if (notificationAction) {
+    setTimeout(() => openNotificationResolver(notificationAction)
+      .catch(error => toast(error.message)), 500);
   }
 }
 
