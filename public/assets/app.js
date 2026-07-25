@@ -2047,6 +2047,7 @@ document.addEventListener("pointerdown", event => {
   const wasOpen = item.classList.contains("is-swiped");
   if (!wasOpen && event.target.closest(".notification-actions,.swipe-actions")) return;
   closeNotificationSwipes(item);
+  if (wasOpen && event.cancelable) event.preventDefault();
   const actionItems = [...actions.children];
   const width = Math.max(108,
     actionItems.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0),
@@ -2119,6 +2120,12 @@ document.addEventListener("pointercancel", () => {
   $(".notification-main,.swipe-main", notificationSwipe.item)?.style.removeProperty("transform");
   notificationSwipe = null;
 });
+
+document.addEventListener("touchmove", event => {
+  if (notificationSwipe?.active && notificationSwipe.locked === "x" && event.cancelable) {
+    event.preventDefault();
+  }
+}, { passive: false });
 
 document.addEventListener("click", event => {
   const suppressedSwipeAction = event.target.closest(".notification-item,.swipe-action-item");
