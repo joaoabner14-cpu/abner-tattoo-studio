@@ -153,13 +153,13 @@ async function registerServiceWorker() {
   return navigator.serviceWorker.register("/sw.js");
 }
 async function enablePushNotifications() {
-  if (!pushSupported()) throw new Error("Este aparelho nÃ£o suporta notificaÃ§Ãµes do PWA.");
+  if (!pushSupported()) throw new Error("Este aparelho não suporta notificações do PWA.");
   const key = await api("/api/push/chave");
   if (!key.configurado || !key.chave_publica) {
-    throw new Error("As chaves de notificaÃ§Ã£o ainda nÃ£o estÃ£o configuradas no servidor.");
+    throw new Error("As chaves de notificação ainda não estão configuradas no servidor.");
   }
   const permission = await Notification.requestPermission();
-  if (permission !== "granted") throw new Error("PermissÃ£o de notificaÃ§Ã£o nÃ£o concedida.");
+  if (permission !== "granted") throw new Error("Permissão de notificação não concedida.");
   const registration = await registerServiceWorker();
   const current = await registration.pushManager.getSubscription();
   if (current) await current.unsubscribe();
@@ -706,34 +706,34 @@ async function openNotificationResolver(typeOrUrl = "") {
   </article>`;
   if (type === "crediario_vencido") {
     rows = items.map(x => swipeRow(
-      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} ? ${money(x.valor)} ? venceu ${dateBr(x.vencimento)}</div></div>`,
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>`,
       `<a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button>`,
       "overdue-card"
     )).join("");
   } else if (type === "sinal_pendente") {
     rows = items.map(x => swipeRow(
-      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} ? ${money(x.valor)}</div></div>`,
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${money(x.valor)}</div></div>`,
       `<button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button>`
     )).join("");
   } else if (["agenda_hoje", "agenda_amanha", "agenda_1h", "confirmacao_pendente"].includes(type)) {
     rows = items.map(x => swipeRow(
-      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} ? ${escapeHtml(x.status)}${x.tatuador ? ` ? ${escapeHtml(x.tatuador)}` : ""}</div></div>`,
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${escapeHtml(x.status)}${x.tatuador ? ` · ${escapeHtml(x.tatuador)}` : ""}</div></div>`,
       `<button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<a class="primary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Confirmar</a>` : ""}`
     )).join("");
   } else if (type === "pos_venda") {
     rows = items.map(x => swipeRow(
-      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.dias_apos} dias ? OS #${x.id_os} ? tarefa para ${dateBr(x.data_tarefa)}</div></div>`,
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.dias_apos} dias · OS #${x.id_os} · tarefa para ${dateBr(x.data_tarefa)}</div></div>`,
       `<button class="primary" data-open-post-sale="${x.id}">Resolver</button>`
     )).join("");
   } else if (type === "contas_abertas") {
     rows = items.map(x => swipeRow(
-      `<div><strong>${escapeHtml(x.descricao)}</strong><div class="muted">${escapeHtml(x.tipo)} ? ${escapeHtml(x.categoria)} ? vence ${dateBr(x.data_vencimento)}</div><strong>${money(x.valor)}</strong></div>`,
+      `<div><strong>${escapeHtml(x.descricao)}</strong><div class="muted">${escapeHtml(x.tipo)} · ${escapeHtml(x.categoria)} · vence ${dateBr(x.data_vencimento)}</div><strong>${money(x.valor)}</strong></div>`,
       `<button class="primary pay-management" data-id="${x.id}" data-value="${x.valor}">Dar baixa</button>`,
       x.data_vencimento < todaySp() ? "is-overdue" : ""
     )).join("");
   } else if (type === "marketing") {
     rows = items.map(x => swipeRow(
-      `<div><strong>${escapeHtml(x.titulo)}</strong><div class="muted">${escapeHtml(x.tipo)} ? ${escapeHtml(x.status)} ? ${dateBr(x.data_acao)}</div></div>`,
+      `<div><strong>${escapeHtml(x.titulo)}</strong><div class="muted">${escapeHtml(x.tipo)} · ${escapeHtml(x.status)} · ${dateBr(x.data_acao)}</div></div>`,
       `<button class="primary" data-marketing-action="edit" data-id="${x.id}">Abrir</button>`
     )).join("");
   }
@@ -759,7 +759,7 @@ function openNotifications() {
   const permission = pushSupported() ? Notification.permission : "unsupported";
   const pushText = permission === "granted" ? "Notificações do app ativas neste aparelho."
     : permission === "denied" ? "Notificações bloqueadas no aparelho. Libere nas configurações do iPhone."
-      : pushSupported() ? "Ative para receber alertas de agenda, financeiro, pos-venda e marketing."
+      : pushSupported() ? "Ative para receber alertas de agenda, financeiro, pós-venda e marketing."
         : "Este navegador não suporta notificações PWA.";
   const preferences = notificationPreferences.map(item => `<label class="notification-preference">
     <span><strong>${escapeHtml(item.rotulo)}</strong><small>${item.horario === "both" ? "Manhã e noite" : item.horario === "evening" ? "Noite" : "Manhã"}</small></span>

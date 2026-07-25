@@ -537,7 +537,7 @@ const PUSH_PREFERENCES = [
   { tipo: "sinal_pendente", rotulo: "Sinais pendentes", horario: "both" },
   { tipo: "crediario_vencido", rotulo: "Crediários vencidos", horario: "morning" },
   { tipo: "contas_abertas", rotulo: "Contas em aberto", horario: "morning" },
-  { tipo: "pos_venda", rotulo: "Pos-venda", horario: "morning" },
+  { tipo: "pos_venda", rotulo: "Pós-venda", horario: "morning" },
   { tipo: "marketing", rotulo: "Marketing", horario: "morning" }
 ];
 async function pushPreferenceMap(db, studioId, userId) {
@@ -676,7 +676,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   if (postSales.length) alerts.push({
     chave: `pos-venda-${date}`,
     tipo: "pos_venda",
-    titulo: `${postSales.length} pos-venda pendente(s)`,
+    titulo: `${postSales.length} pós-venda pendente(s)`,
     mensagem: postSales.slice(0, 3).map(item =>
       `${item.dias_apos} dias - OS #${item.id_os} - ${item.nome}`).join("\n"),
     url: "/?notificacao=pos_venda#agenda"
@@ -916,7 +916,7 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
       });
     const postSaleEvents = postSales.map(item => ({
       id: `pos-venda-${item.id}`,
-      title: `Pos-venda · ${item.dias_apos} dias · ${item.nome}`,
+      title: `Pós-venda · ${item.dias_apos} dias · ${item.nome}`,
       start: item.data_tarefa,
       allDay: true,
       backgroundColor: "#60a5fa",
@@ -1395,11 +1395,11 @@ async function postSaleTask(db, request, url, studioId) {
     LEFT JOIN agendamentos a ON a.id=pv.id_agendamento
     WHERE pv.id=? AND pv.id_estudio=?
   `).bind(taskId, studioId).first();
-  if (!task) return error("Tarefa de pos-venda nao encontrada.", 404);
+  if (!task) return error("Tarefa de pós-venda não encontrada.", 404);
   if (request.method === "GET" && url.pathname === `/api/pos-venda/${taskId}`) {
     const firstName = String(task.nome || "").trim().split(/\s+/)[0] || "";
     const message = encodeURIComponent(
-      `${firstName ? `Oi, ${firstName}, tudo bem?` : "Oi, tudo bem?"} Passando para saber como esta a cicatrizacao da sua tatuagem. Esta tudo certinho? Se puder, me manda uma foto para eu acompanhar.`
+      `${firstName ? `Oi, ${firstName}, tudo bem?` : "Oi, tudo bem?"} Passando para saber como está a cicatrização da sua tatuagem. Está tudo certinho? Se puder, me manda uma foto para eu acompanhar.`
     );
     return json({
       ...task,
@@ -1418,7 +1418,7 @@ async function postSaleTask(db, request, url, studioId) {
         INSERT INTO crm_eventos(id_estudio,id_cliente,id_os,id_agendamento,tipo,descricao)
         VALUES(?,?,?,?,?,?)
       `).bind(studioId, task.id_cliente, task.id_os, task.id_agendamento || null,
-        "Pos-venda", `Contato de pos-venda de ${task.dias_apos} dias concluido.`)
+        "Pos-venda", `Contato de pós-venda de ${task.dias_apos} dias concluído.`)
     ]);
     return json({ ok: true });
   }
@@ -2037,7 +2037,7 @@ async function financialManagement(db, request, url, studioId) {
   if (request.method === "PUT" && url.pathname === "/api/financeiro/gestao/saldo-inicial") {
     const data = await body(request);
     const initialBalance = number(data.saldo_inicial_caixa);
-    if (initialBalance < 0) return error("O saldo inicial nÃ£o pode ser negativo.");
+    if (initialBalance < 0) return error("O saldo inicial não pode ser negativo.");
     const initialDate = /^\d{4}-\d{2}-\d{2}$/.test(data.data_saldo_inicial_caixa || "")
       ? data.data_saldo_inicial_caixa : today;
     await db.prepare(`
@@ -2825,9 +2825,9 @@ async function passwordCredentials(password) {
   if (value.length < 10)
     throw new Error("A senha deve ter pelo menos 10 caracteres.");
   if (!/[A-Za-z]/.test(value) || !/\d/.test(value))
-    throw new Error("A senha deve ter letras e nÃºmeros.");
+    throw new Error("A senha deve ter letras e números.");
   if (/^(.)\1+$/.test(value) || ["1234567890", "0123456789"].includes(value))
-    throw new Error("Escolha uma senha menos previsÃ­vel.");
+    throw new Error("Escolha uma senha menos previsível.");
   const iterations = 100000;
   const salt = crypto.getRandomValues(new Uint8Array(32));
   const hash = await derivePassword(String(password), salt, iterations);
@@ -3313,7 +3313,7 @@ async function authApi(db, request, url) {
     return authResponse({ ok: true }, 200, await createSession(db, request, account.id));
   }
   if (path === "/api/auth/logout" && request.method === "POST") {
-    if (user && !csrfValid(request, user)) return authResponse({ error: "Token de seguranÃ§a invÃ¡lido." }, 403);
+    if (user && !csrfValid(request, user)) return authResponse({ error: "Token de segurança inválido." }, 403);
     if (user) await db.prepare("UPDATE sessoes SET revogada=1 WHERE id=?").bind(user.id_sessao).run();
     const secure = url.protocol === "https:" ? "; Secure" : "";
     const response = authResponse({ ok: true }, 200,
@@ -3784,7 +3784,7 @@ Você possui uma sessão de tatuagem agendada para *${brDateTime(item.data_hora)
         return {
           id: `oportunidade-${item.key}`, tipo: "marketing", titulo: item.name,
           mensagem: link ? `Faltam ${days} dias. Verifique o andamento da campanha.`
-            : `Faltam ${days} dias e a campanha ainda nao foi planejada.`,
+            : `Faltam ${days} dias e a campanha ainda não foi planejada.`,
           data: item.date, dias: days, chave: item.key,
           id_planejamento: link?.id_planejamento || null,
           url: "/#marketing", lida: 0, resolvida: 0, atual: true
