@@ -531,11 +531,11 @@ async function sendPushNotification(env, subscription, payload) {
 }
 const PUSH_PREFERENCES = [
   { tipo: "agenda_hoje", rotulo: "Agendamentos de hoje", horario: "morning" },
-  { tipo: "agenda_amanha", rotulo: "Agendamentos de amanha", horario: "evening" },
-  { tipo: "agenda_1h", rotulo: "Lembrete 1h antes da sessao", horario: "both" },
-  { tipo: "confirmacao_pendente", rotulo: "Confirmacoes pendentes", horario: "evening" },
+  { tipo: "agenda_amanha", rotulo: "Agendamentos de amanhã", horario: "evening" },
+  { tipo: "agenda_1h", rotulo: "Lembrete 1h antes da sessão", horario: "both" },
+  { tipo: "confirmacao_pendente", rotulo: "Confirmações pendentes", horario: "evening" },
   { tipo: "sinal_pendente", rotulo: "Sinais pendentes", horario: "both" },
-  { tipo: "crediario_vencido", rotulo: "Crediarios vencidos", horario: "morning" },
+  { tipo: "crediario_vencido", rotulo: "Crediários vencidos", horario: "morning" },
   { tipo: "contas_abertas", rotulo: "Contas em aberto", horario: "morning" },
   { tipo: "pos_venda", rotulo: "Pos-venda", horario: "morning" },
   { tipo: "marketing", rotulo: "Marketing", horario: "morning" }
@@ -580,7 +580,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     return results.map(item => ({
       chave: `agenda-1h-${item.id}-${item.data_hora.slice(0, 16)}`,
       tipo: "agenda_1h",
-      titulo: "Sessao em breve",
+      titulo: "Sessão em breve",
       mensagem: `${brDateTime(item.data_hora)} - ${item.nome}`,
       url: "/?notificacao=agenda_1h#agenda",
       urgency: "high"
@@ -597,7 +597,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     if (results.length) alerts.push({
       chave: `agenda-amanha-${tomorrow}`,
       tipo: "agenda_amanha",
-      titulo: `${results.length} sessao(oes) amanha`,
+      titulo: `${results.length} sessão(?es) amanhã`,
       mensagem: results.slice(0, 3).map(item =>
         `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
       url: "/?notificacao=agenda_amanha#agenda"
@@ -606,7 +606,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     if (unconfirmed.length) alerts.push({
       chave: `confirmacao-pendente-${tomorrow}`,
       tipo: "confirmacao_pendente",
-      titulo: `${unconfirmed.length} confirmacao(oes) pendente(s)`,
+      titulo: `${unconfirmed.length} confirmação(ões) pendente(s)`,
       mensagem: unconfirmed.slice(0, 3).map(item =>
         `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
       url: "/?notificacao=confirmacao_pendente#agenda",
@@ -618,7 +618,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   if (summary.agendamentos_hoje?.length) alerts.push({
     chave: `agenda-hoje-${date}`,
     tipo: "agenda_hoje",
-    titulo: `${summary.agendamentos_hoje.length} sessao(oes) hoje`,
+    titulo: `${summary.agendamentos_hoje.length} sessão(?es) hoje`,
     mensagem: summary.agendamentos_hoje.slice(0, 3).map(item =>
       `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
     url: "/?notificacao=agenda_hoje#agenda",
@@ -691,7 +691,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   if (marketing.length) alerts.push({
     chave: `marketing-${date}`,
     tipo: "marketing",
-    titulo: `${marketing.length} acao(oes) de marketing`,
+    titulo: `${marketing.length} ação(ões) de marketing`,
     mensagem: marketing.slice(0, 3).map(item =>
       `${dateBr(item.data_acao)} - ${item.titulo}`).join("\n"),
     url: "/?notificacao=marketing#marketing"
@@ -3658,7 +3658,7 @@ async function api(request, env, url, user) {
       UPDATE push_notificacoes SET ${field}
       WHERE id=? AND id_estudio=? AND id_usuario=?
     `).bind(id, studioId, user.id).run();
-    if (!result.meta.changes) return error("Notificacao nao encontrada.", 404);
+    if (!result.meta.changes) return error("Notificação não encontrada.", 404);
     return json({ ok: true });
   }
   if (url.pathname === "/api/notificacoes/pendencias" && request.method === "GET") {

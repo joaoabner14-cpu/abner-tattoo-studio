@@ -729,12 +729,12 @@ async function loadNotifications() {
 
 function openNotifications() {
   const permission = pushSupported() ? Notification.permission : "unsupported";
-  const pushText = permission === "granted" ? "Notificacoes do app ativas neste aparelho."
-    : permission === "denied" ? "Notificacoes bloqueadas no aparelho. Libere nas configuracoes do iPhone."
+  const pushText = permission === "granted" ? "Notificações do app ativas neste aparelho."
+    : permission === "denied" ? "Notificações bloqueadas no aparelho. Libere nas configurações do iPhone."
       : pushSupported() ? "Ative para receber alertas de agenda, financeiro, pos-venda e marketing."
-        : "Este navegador nao suporta notificacoes PWA.";
+        : "Este navegador não suporta notificações PWA.";
   const preferences = notificationPreferences.map(item => `<label class="notification-preference">
-    <span><strong>${escapeHtml(item.rotulo)}</strong><small>${item.horario === "both" ? "Manha e noite" : item.horario === "evening" ? "Noite" : "Manha"}</small></span>
+    <span><strong>${escapeHtml(item.rotulo)}</strong><small>${item.horario === "both" ? "Manhã e noite" : item.horario === "evening" ? "Noite" : "Manhã"}</small></span>
     <input type="checkbox" data-notification-preference="${escapeHtml(item.tipo)}" data-horario="${escapeHtml(item.horario)}" ${Number(item.ativo) ? "checked" : ""}>
   </label>`).join("");
   const rows = notificationsData.map(item => {
@@ -746,20 +746,20 @@ function openNotifications() {
       </button>
       ${storedId ? `<button class="secondary notification-resolve" type="button" data-resolve-notification="${storedId}">Resolver</button>` : ""}
     </article>`;
-  }).join("") || `<div class="card muted">Nenhuma notificacao interna no momento.</div>`;
+  }).join("") || `<div class="card muted">Nenhuma notificação interna no momento.</div>`;
   const dialog = $("#actionDialog");
   if (dialog.open) dialog.close();
-  $("#actionContent").innerHTML = `<header><h2>Notificacoes</h2><button class="close" type="button">X</button></header>
-    <div class="card push-card"><strong>Notificacoes do app</strong><small class="muted">${escapeHtml(pushText)}</small>
+  $("#actionContent").innerHTML = `<header><h2>Notificações</h2><button class="close" type="button">X</button></header>
+    <div class="card push-card"><strong>Notificações do app</strong><small class="muted">${escapeHtml(pushText)}</small>
       <div class="card-actions">
         <button class="primary" type="button" data-enable-push ${!pushSupported() || permission === "denied" ? "disabled" : ""}>Ativar neste aparelho</button>
         <button class="secondary" type="button" data-test-push ${permission !== "granted" ? "disabled" : ""}>Enviar teste</button>
         <button class="secondary" type="button" data-send-alerts-now ${permission !== "granted" ? "disabled" : ""}>Disparar alertas reais agora</button>
       </div>
     </div>
-    ${preferences ? `<details class="card notification-settings"><summary>Preferencias de alerta</summary>
+    ${preferences ? `<details class="card notification-settings"><summary>Preferências de alerta</summary>
       <form id="notificationPreferencesForm" class="notification-preferences">${preferences}
-        <button class="secondary" type="submit">Salvar preferencias</button>
+        <button class="secondary" type="submit">Salvar preferências</button>
       </form>
     </details>` : ""}
     <div class="notification-list">${rows}</div>`;
@@ -2203,7 +2203,7 @@ document.addEventListener("click", event => {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ preferencias })
-    }).then(async () => { toast("Preferencias salvas."); await loadNotifications(); openNotifications(); })
+    }).then(async () => { toast("Preferências salvas."); await loadNotifications(); openNotifications(); })
       .catch(error => toast(error.message));
   }
   if (event.target.closest("[data-enable-push]")) {
