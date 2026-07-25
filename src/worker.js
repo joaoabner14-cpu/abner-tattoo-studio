@@ -1425,6 +1425,50 @@ async function postSaleTask(db, request, url, studioId) {
   return null;
 }
 
+async function confirmAppointment(db, url, studioId, userId) {
+  const appointmentId = integer(url.pathname.match(/^\/api\/agendamentos\/(\d+)\/confirmar$/)?.[1]);
+  if (!appointmentId) return error("Agendamento inválido.", 400);
+  const appointment = await db.prepare(`
+    SELECT a.id,a.id_cliente,a.status,a.data_hora,a.faltou,os.id id_os
+    FROM agendamentos a
+    LEFT JOIN ordem_servico os ON os.id_agendamento=a.id AND os.id_estudio=a.id_estudio
+    WHERE a.id=? AND a.id_estudio=?
+  `).bind(appointmentId, studioId).first();
+  if (!appointment) return error("Agendamento não encontrado.", 404);
+  if (appointment.status === "Confirmado")
+    return json({ ok: true, status: "Confirmado" });
+  if (appointment.faltou || ["Cancelado", "Concluido"].includes(appointment.status))
+    return error("Este agendamento não pode ser confirmado neste status.", 400);
+  await db.batch([
+    db.prepare(`
+      UPDATE agendamentos SET status='Confirmado',faltou=0
+      WHERE id=? AND id_estudio=?
+    `).bind(appointmentId, studioId),
+    db.prepare(`
+      UPDATE ordem_servico SET status='Confirmada'
+      WHERE id_agendamento=? AND id_estudio=?
+    `).bind(appointmentId, studioId),
+    db.prepare(`
+      INSERT INTO crm_eventos(id_estudio,id_cliente,id_os,id_agendamento,tipo,descricao)
+      VALUES(?,?,?,?,?,'Cliente confirmou presença na sessão.')
+    `).bind(studioId, appointment.id_cliente, appointment.id_os || null,
+      appointmentId, "Confirmação")
+  ]);
+  const tomorrow = saoPauloDate(1);
+  const pending = await db.prepare(`
+    SELECT COUNT(*) total FROM agendamentos
+    WHERE id_estudio=? AND status='Agendado' AND substr(data_hora,1,10)=?
+  `).bind(studioId, tomorrow).first();
+  if (!Number(pending?.total || 0)) {
+    await db.prepare(`
+      UPDATE push_notificacoes
+      SET resolvida=1,data_resolucao=CURRENT_TIMESTAMP
+      WHERE id_estudio=? AND id_usuario=? AND tipo='confirmacao_pendente' AND resolvida=0
+    `).bind(studioId, userId).run();
+  }
+  return json({ ok: true, status: "Confirmado" });
+}
+
 async function stock(db, request, url, studioId) {
   const match = url.pathname.match(/^\/api\/estoque(?:\/(\d+))?(?:\/movimentos)?$/);
   if (!match) return null;
@@ -4037,6 +4081,8 @@ Você possui uma sessão de tatuagem agendada para *${brDateTime(item.data_hora)
   }
   if (request.method === "POST" && url.pathname === "/api/agendamentos")
     return createAppointment(db, request, studioId, user);
+  if (request.method === "POST" && /^\/api\/agendamentos\/\d+\/confirmar$/.test(url.pathname))
+    return confirmAppointment(db, url, studioId, user.id);
   if (request.method === "PUT" && /^\/api\/agendamentos\/\d+$/.test(url.pathname)) {
     const data = await body(request);
     const tattooerId = integer(data.id_tatuador);

@@ -206,7 +206,7 @@ async function loadAgenda() {
         <span class="appointment-person"><strong>${item.hora}</strong><span>·</span><span class="appointment-name">${escapeHtml(item.nome)}${item.tatuador ? ` · ${escapeHtml(item.tatuador)}` : ""}</span></span>
         <span class="badge">${escapeHtml(item.status)}</span>
       </button>
-      ${item.eh_amanha && !item.cancelado ? `<a class="primary appointment-confirm" target="_blank" rel="noopener" href="${item.link_whatsapp}">Confirmar presença</a>` : ""}
+      ${item.eh_amanha && !item.cancelado && item.status === "Agendado" ? `<button class="primary appointment-confirm" type="button" data-confirm-appointment="${item.id_agendamento}">Marcar confirmado</button>` : ""}
     </div>`).join("")}</div></article>
   `).join("") || `<div class="panel empty">Nenhum agendamento futuro.</div>`;
   if (hasModule("financeiro")) loadFinance().catch(error => toast(error.message));
@@ -718,7 +718,7 @@ async function openNotificationResolver(typeOrUrl = "") {
   } else if (["agenda_hoje", "agenda_amanha", "agenda_1h", "confirmacao_pendente"].includes(type)) {
     rows = items.map(x => swipeRow(
       `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${escapeHtml(x.status)}${x.tatuador ? ` · ${escapeHtml(x.tatuador)}` : ""}</div></div>`,
-      `<button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<a class="primary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Confirmar</a>` : ""}`
+      `<button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<button class="primary" type="button" data-confirm-appointment="${x.id_agendamento}">Marcar confirmado</button>` : ""}`
     )).join("");
   } else if (type === "pos_venda") {
     rows = items.map(x => swipeRow(
@@ -2203,6 +2203,22 @@ document.addEventListener("click", event => {
   if (postSaleOpen) {
     $("#actionDialog").close();
     openPostSaleTask(postSaleOpen.dataset.openPostSale).catch(error => toast(error.message));
+  }
+  const confirmAppointment = event.target.closest("[data-confirm-appointment]");
+  if (confirmAppointment) {
+    confirmAppointment.disabled = true;
+    post(`/api/agendamentos/${confirmAppointment.dataset.confirmAppointment}/confirmar`)
+      .then(async () => {
+        toast("Agendamento confirmado.");
+        if ($("#actionDialog").open) $("#actionDialog").close();
+        calendar?.refetchEvents();
+        await loadAgenda();
+        if (selectedClientId) await loadClient(selectedClientId);
+      })
+      .catch(error => {
+        confirmAppointment.disabled = false;
+        toast(error.message);
+      });
   }
   const completePostSale = event.target.closest(".complete-post-sale");
   if (completePostSale) {
