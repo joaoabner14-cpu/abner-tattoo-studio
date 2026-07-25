@@ -740,11 +740,11 @@ function openNotifications() {
   const rows = notificationsData.map(item => {
     const storedId = /^\d+$/.test(String(item.id || "")) ? item.id : "";
     return `<article class="notification-item ${Number(item.lida) ? "is-read" : ""}" data-notification-id="${storedId}" data-notification-type="${escapeHtml(item.tipo || "")}" data-notification-url="${escapeHtml(item.url || "")}" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
+      ${storedId ? `<div class="notification-actions"><button class="notification-resolve" type="button" data-resolve-notification="${storedId}">Resolver</button></div>` : ""}
       <button class="notification-main" type="button">
         <span class="notification-icon">${Number(item.lida) ? "✓" : item.dias < 0 ? "!" : item.tipo === "marketing" ? "*" : "-"}</span>
         <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} - ${dateBr(item.data)}</small></span>
       </button>
-      ${storedId ? `<button class="secondary notification-resolve" type="button" data-resolve-notification="${storedId}">Resolver</button>` : ""}
     </article>`;
   }).join("") || `<div class="card muted">Nenhuma notificação interna no momento.</div>`;
   const dialog = $("#actionDialog");
@@ -764,6 +764,15 @@ function openNotifications() {
     </details>` : ""}
     <div class="notification-list">${rows}</div>`;
   dialog.showModal();
+}
+
+let notificationSwipe = null;
+function closeNotificationSwipes(except = null) {
+  $$(".notification-item.is-swiped").forEach(item => {
+    if (item === except) return;
+    item.classList.remove("is-swiped", "is-swiping");
+    $(".notification-main", item)?.style.removeProperty("transform");
+  });
 }
 
 function openMarketingPlan(itemId = "") {
@@ -2024,7 +2033,64 @@ document.addEventListener("input", event => {
   if (event.target.matches("[data-cnpj]")) maskCnpj(event.target);
 });
 
+document.addEventListener("pointerdown", event => {
+  const item = event.target.closest(".notification-item");
+  if (!item || !item.querySelector("[data-resolve-notification]") ||
+    event.target.closest("[data-resolve-notification]")) return;
+  closeNotificationSwipes(item);
+  notificationSwipe = {
+    item,
+    startX: event.clientX,
+    startY: event.clientY,
+    dx: 0,
+    active: true,
+    pointerId: event.pointerId
+  };
+  item.classList.add("is-swiping");
+  item.setPointerCapture?.(event.pointerId);
+});
+
+document.addEventListener("pointermove", event => {
+  if (!notificationSwipe?.active || event.pointerId !== notificationSwipe.pointerId) return;
+  const dx = event.clientX - notificationSwipe.startX;
+  const dy = event.clientY - notificationSwipe.startY;
+  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
+    notificationSwipe.active = false;
+    notificationSwipe.item.classList.remove("is-swiping");
+    $(".notification-main", notificationSwipe.item)?.style.removeProperty("transform");
+    return;
+  }
+  if (Math.abs(dx) < 6) return;
+  notificationSwipe.dx = dx;
+  const translate = Math.max(-108, Math.min(0, dx));
+  $(".notification-main", notificationSwipe.item).style.transform = `translateX(${translate}px)`;
+});
+
+document.addEventListener("pointerup", event => {
+  if (!notificationSwipe || event.pointerId !== notificationSwipe.pointerId) return;
+  const { item, dx } = notificationSwipe;
+  item.classList.remove("is-swiping");
+  item.dataset.swipeSuppress = Math.abs(dx) > 8 ? "1" : "";
+  setTimeout(() => { delete item.dataset.swipeSuppress; }, 180);
+  if (dx <= -48) {
+    item.classList.add("is-swiped");
+    $(".notification-main", item).style.removeProperty("transform");
+  } else {
+    item.classList.remove("is-swiped");
+    $(".notification-main", item).style.removeProperty("transform");
+  }
+  notificationSwipe = null;
+});
+
+document.addEventListener("pointercancel", () => {
+  if (!notificationSwipe) return;
+  notificationSwipe.item.classList.remove("is-swiping");
+  $(".notification-main", notificationSwipe.item)?.style.removeProperty("transform");
+  notificationSwipe = null;
+});
+
 document.addEventListener("click", event => {
+  if (!event.target.closest(".notification-item")) closeNotificationSwipes();
   const nav = event.target.closest(".nav-link");
   if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") loadFinancialManagement(); if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "privacidade") loadPrivacyDashboard().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
   if (event.target.closest("[data-open=appointment]")) openAppointment();
@@ -2172,6 +2238,11 @@ document.addEventListener("click", event => {
   }
   const notification = event.target.closest(".notification-item");
   if (notification && !event.target.closest("[data-resolve-notification]")) {
+    if (notification.dataset.swipeSuppress === "1") return;
+    if (notification.classList.contains("is-swiped")) {
+      closeNotificationSwipes();
+      return;
+    }
     $("#actionDialog").close();
     if (notification.dataset.notificationId) {
       api(`/api/notificacoes/${notification.dataset.notificationId}/lida`, { method: "POST" })
