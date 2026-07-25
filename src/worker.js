@@ -154,6 +154,17 @@ function saoPauloHour() {
   }).format(new Date());
 }
 
+function saoPauloDateTime(date = new Date()) {
+  const day = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(date);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23"
+  }).format(date);
+  return `${day} ${time}`;
+}
+
 function nthWeekday(year, month, weekday, occurrence) {
   const first = new Date(Date.UTC(year, month - 1, 1));
   const day = 1 + (7 + weekday - first.getUTCDay()) % 7 + (occurrence - 1) * 7;
@@ -518,12 +529,66 @@ async function sendPushNotification(env, subscription, payload) {
   }
   return response;
 }
+const PUSH_PREFERENCES = [
+  { tipo: "agenda_hoje", rotulo: "Agendamentos de hoje", horario: "morning" },
+  { tipo: "agenda_amanha", rotulo: "Agendamentos de amanha", horario: "evening" },
+  { tipo: "agenda_1h", rotulo: "Lembrete 1h antes da sessao", horario: "both" },
+  { tipo: "confirmacao_pendente", rotulo: "Confirmacoes pendentes", horario: "evening" },
+  { tipo: "sinal_pendente", rotulo: "Sinais pendentes", horario: "both" },
+  { tipo: "crediario_vencido", rotulo: "Crediarios vencidos", horario: "morning" },
+  { tipo: "contas_abertas", rotulo: "Contas em aberto", horario: "morning" },
+  { tipo: "pos_venda", rotulo: "Pos-venda", horario: "morning" },
+  { tipo: "marketing", rotulo: "Marketing", horario: "morning" }
+];
+async function pushPreferenceMap(db, studioId, userId) {
+  const preferences = new Map(PUSH_PREFERENCES.map(item =>
+    [item.tipo, { ...item, ativo: 1 }]));
+  const { results } = await db.prepare(`
+    SELECT tipo,ativo,horario FROM push_preferencias
+    WHERE id_estudio=? AND id_usuario=?
+  `).bind(studioId, userId).all();
+  for (const item of results) {
+    if (preferences.has(item.tipo)) preferences.set(item.tipo, {
+      ...preferences.get(item.tipo),
+      ativo: Number(item.ativo),
+      horario: item.horario || preferences.get(item.tipo).horario
+    });
+  }
+  return preferences;
+}
+function pushEnabled(alert, preferences, mode) {
+  const preference = preferences.get(alert.tipo);
+  if (!preference || !Number(preference.ativo)) return false;
+  return preference.horario === "both" || preference.horario === mode ||
+    (mode === "hourly" && preference.horario === "both");
+}
 async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morning") {
   const tomorrow = addDays(date, 1);
   const alerts = [];
-  if (mode === "evening") {
+  if (mode === "hourly") {
+    const now = new Date();
+    const start = saoPauloDateTime(now);
+    const end = saoPauloDateTime(new Date(now.getTime() + 90 * 60 * 1000));
     const { results } = await db.prepare(`
       SELECT a.id,a.data_hora,c.nome
+      FROM agendamentos a JOIN clientes c ON c.id=a.id_cliente
+      WHERE a.id_estudio=? AND a.data_hora>=?
+        AND a.data_hora<?
+        AND lower(a.status) NOT IN ('cancelado','concluido')
+      ORDER BY a.data_hora
+    `).bind(studioId, start, end).all();
+    return results.map(item => ({
+      chave: `agenda-1h-${item.id}-${item.data_hora.slice(0, 16)}`,
+      tipo: "agenda_1h",
+      titulo: "Sessao em breve",
+      mensagem: `${brDateTime(item.data_hora)} - ${item.nome}`,
+      url: "/#agenda",
+      urgency: "high"
+    }));
+  }
+  if (mode === "evening") {
+    const { results } = await db.prepare(`
+      SELECT a.id,a.data_hora,a.status,c.nome
       FROM agendamentos a JOIN clientes c ON c.id=a.id_cliente
       WHERE a.id_estudio=? AND substr(a.data_hora,1,10)=?
         AND lower(a.status) NOT IN ('cancelado','concluido')
@@ -531,27 +596,57 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     `).bind(studioId, tomorrow).all();
     if (results.length) alerts.push({
       chave: `agenda-amanha-${tomorrow}`,
-      tipo: "agenda",
-      titulo: `${results.length} sessão(ões) amanhã`,
+      tipo: "agenda_amanha",
+      titulo: `${results.length} sessao(oes) amanha`,
       mensagem: results.slice(0, 3).map(item =>
-        `${brDateTime(item.data_hora)} · ${item.nome}`).join("\n"),
+        `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
       url: "/#agenda"
+    });
+    const unconfirmed = results.filter(item => item.status === "Agendado");
+    if (unconfirmed.length) alerts.push({
+      chave: `confirmacao-pendente-${tomorrow}`,
+      tipo: "confirmacao_pendente",
+      titulo: `${unconfirmed.length} confirmacao(oes) pendente(s)`,
+      mensagem: unconfirmed.slice(0, 3).map(item =>
+        `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
+      url: "/#agenda",
+      urgency: "high"
     });
     return alerts;
   }
   const summary = await dailyWhatsAppSummary(db, studioId, date);
   if (summary.agendamentos_hoje?.length) alerts.push({
     chave: `agenda-hoje-${date}`,
-    tipo: "agenda",
-    titulo: `${summary.agendamentos_hoje.length} sessão(ões) hoje`,
+    tipo: "agenda_hoje",
+    titulo: `${summary.agendamentos_hoje.length} sessao(oes) hoje`,
     mensagem: summary.agendamentos_hoje.slice(0, 3).map(item =>
-      `${brDateTime(item.data_hora)} · ${item.nome}`).join("\n"),
+      `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
     url: "/#agenda",
+    urgency: "high"
+  });
+  const { results: pendingSignals } = await db.prepare(`
+    SELECT a.id,c.nome,f.valor_sinal,a.data_hora
+    FROM financeiro f
+    JOIN ordem_servico os ON os.id=f.id_os
+    JOIN agendamentos a ON a.id=os.id_agendamento
+    JOIN clientes c ON c.id=f.id_cliente
+    WHERE f.id_estudio=? AND f.valor_sinal>0 AND COALESCE(f.sinal_pago,0)=0
+      AND a.status NOT IN ('Cancelado','Concluido')
+      AND substr(a.data_hora,1,10)<=?
+    ORDER BY a.data_hora
+  `).bind(studioId, tomorrow).all();
+  if (pendingSignals.length) alerts.push({
+    chave: `sinal-pendente-${date}`,
+    tipo: "sinal_pendente",
+    titulo: `${pendingSignals.length} sinal(is) pendente(s)`,
+    mensagem: pendingSignals.slice(0, 3).map(item =>
+      `${brDateTime(item.data_hora)} - ${item.nome} - ${moneyText(item.valor_sinal)}`).join("\n"),
+    url: "/#financeiro",
     urgency: "high"
   });
   if (summary.parcelas_atrasadas?.length) alerts.push({
     chave: `crediario-atrasado-${date}`,
-    tipo: "financeiro",
+    tipo: "crediario_vencido",
     titulo: `${summary.parcelas_atrasadas.length} parcela(s) atrasada(s)`,
     mensagem: `Total em atraso: ${moneyText(summary.total_atrasado || 0)}`,
     url: "/#financeiro",
@@ -564,10 +659,10 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   `).bind(studioId, date).all();
   if (bills.length) alerts.push({
     chave: `contas-abertas-${date}`,
-    tipo: "financeiro",
+    tipo: "contas_abertas",
     titulo: `${bills.length} conta(s) em aberto`,
     mensagem: bills.slice(0, 3).map(item =>
-      `${item.data_vencimento < date ? "Vencida" : "Vence hoje"} · ${item.descricao} · ${moneyText(item.valor)}`
+      `${item.data_vencimento < date ? "Vencida" : "Vence hoje"} - ${item.descricao} - ${moneyText(item.valor)}`
     ).join("\n"),
     url: "/#financeiro",
     urgency: bills.some(item => item.data_vencimento < date) ? "high" : "normal"
@@ -581,9 +676,9 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   if (postSales.length) alerts.push({
     chave: `pos-venda-${date}`,
     tipo: "pos_venda",
-    titulo: `${postSales.length} pós-venda pendente(s)`,
+    titulo: `${postSales.length} pos-venda pendente(s)`,
     mensagem: postSales.slice(0, 3).map(item =>
-      `${item.dias_apos} dias · OS #${item.id_os} · ${item.nome}`).join("\n"),
+      `${item.dias_apos} dias - OS #${item.id_os} - ${item.nome}`).join("\n"),
     url: "/#agenda"
   });
   const { results: marketing } = await db.prepare(`
@@ -596,9 +691,9 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   if (marketing.length) alerts.push({
     chave: `marketing-${date}`,
     tipo: "marketing",
-    titulo: `${marketing.length} ação(ões) de marketing`,
+    titulo: `${marketing.length} acao(oes) de marketing`,
     mensagem: marketing.slice(0, 3).map(item =>
-      `${dateBr(item.data_acao)} · ${item.titulo}`).join("\n"),
+      `${dateBr(item.data_acao)} - ${item.titulo}`).join("\n"),
     url: "/#marketing"
   });
   return alerts;
@@ -612,7 +707,9 @@ async function sendStudioPushAlerts(env, studio, mode) {
     WHERE id_estudio=? AND ativo=1
   `).bind(studio.id).all();
   for (const subscription of subscriptions) {
+    const preferences = await pushPreferenceMap(env.DB, studio.id, subscription.id_usuario);
     for (const alert of alerts) {
+      if (!pushEnabled(alert, preferences, mode)) continue;
       const existing = await env.DB.prepare(`
         SELECT id FROM push_notificacoes
         WHERE id_estudio=? AND id_inscricao=? AND chave=? AND data_referencia=?
@@ -632,6 +729,10 @@ async function sendStudioPushAlerts(env, studio, mode) {
           tag: alert.chave,
           urgency: alert.urgency
         });
+        if ([404, 410].includes(response.status)) {
+          await env.DB.prepare("UPDATE push_inscricoes SET ativo=0 WHERE id=?")
+            .bind(subscription.id).run();
+        }
         await env.DB.batch([
           env.DB.prepare(`
             UPDATE push_notificacoes SET status='Enviado',resposta=?,data_envio=CURRENT_TIMESTAMP
@@ -651,14 +752,17 @@ async function sendStudioPushAlerts(env, studio, mode) {
 }
 async function sendScheduledPushAlerts(env) {
   const hour = Number(saoPauloHour());
-  const mode = hour >= 18 ? "evening" : hour >= 7 && hour <= 10 ? "morning" : "";
-  if (!mode) return;
+  const modes = ["hourly"];
+  if (hour >= 18 && hour <= 21) modes.push("evening");
+  if (hour >= 7 && hour <= 10) modes.push("morning");
   const { results: studios } = await env.DB.prepare(`
     SELECT DISTINCT e.id FROM estudios e
     JOIN push_inscricoes pi ON pi.id_estudio=e.id AND pi.ativo=1
     WHERE e.ativo=1
   `).all();
-  for (const studio of studios) await sendStudioPushAlerts(env, studio, mode);
+  for (const studio of studios) {
+    for (const mode of modes) await sendStudioPushAlerts(env, studio, mode);
+  }
 }
 
 async function listAppointments(db, url, studioId, studioName, enabledModules) {
@@ -3312,7 +3416,8 @@ async function authApi(db, request, url) {
 function requiredModules(pathname) {
   if (pathname.startsWith("/api/push")) return [];
   if (pathname === "/api/lgpd") return ["clientes"];
-  if (pathname === "/api/notificacoes" || pathname.startsWith("/api/marketing"))
+  if (pathname.startsWith("/api/notificacoes")) return [];
+  if (pathname.startsWith("/api/marketing"))
     return ["marketing"];
   if (pathname.startsWith("/api/estoque")) return ["estoque"];
   if (/^\/api\/os\/\d+\/(materiais|tintas)/.test(pathname))
@@ -3499,48 +3604,99 @@ async function api(request, env, url, user) {
     if (!result.meta.changes) return error("Ordem de serviço não encontrada.", 404);
     return json({ ok: true });
   }
+  if (url.pathname === "/api/notificacoes/preferencias") {
+    if (request.method === "GET") {
+      const preferences = await pushPreferenceMap(db, studioId, user.id);
+      return json([...preferences.values()]);
+    }
+    if (request.method === "PUT") {
+      const data = await body(request);
+      const items = Array.isArray(data.preferencias) ? data.preferencias : [];
+      const statements = items.filter(item =>
+        PUSH_PREFERENCES.some(base => base.tipo === item.tipo)
+      ).map(item => db.prepare(`
+        INSERT INTO push_preferencias(id_estudio,id_usuario,tipo,ativo,horario,data_atualizacao)
+        VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(id_estudio,id_usuario,tipo) DO UPDATE SET
+          ativo=excluded.ativo,horario=excluded.horario,data_atualizacao=CURRENT_TIMESTAMP
+      `).bind(studioId, user.id, item.tipo, item.ativo ? 1 : 0,
+        ["morning", "evening", "both"].includes(item.horario) ? item.horario : "both"));
+      if (statements.length) await db.batch(statements);
+      return json({ ok: true });
+    }
+  }
+  const notificationAction = url.pathname.match(/^\/api\/notificacoes\/(\d+)\/(lida|resolver)$/);
+  if (notificationAction && request.method === "POST") {
+    const id = integer(notificationAction[1]);
+    const field = notificationAction[2] === "resolver"
+      ? "resolvida=1,data_resolucao=CURRENT_TIMESTAMP"
+      : "lida=1,data_leitura=CURRENT_TIMESTAMP";
+    const result = await db.prepare(`
+      UPDATE push_notificacoes SET ${field}
+      WHERE id=? AND id_estudio=? AND id_usuario=?
+    `).bind(id, studioId, user.id).run();
+    if (!result.meta.changes) return error("Notificacao nao encontrada.", 404);
+    return json({ ok: true });
+  }
   if (url.pathname === "/api/notificacoes" && request.method === "GET") {
     const today = saoPauloDate();
-    const todayTime = Date.parse(`${today}T12:00:00Z`);
-    const { results: links } = await db.prepare(`
-      SELECT mop.chave,mop.id_planejamento,pm.status
-      FROM marketing_oportunidade_planos mop
-      LEFT JOIN planejamento_marketing pm ON pm.id=mop.id_planejamento
-      WHERE mop.id_estudio=?
-    `).bind(studioId).all();
-    const opportunities = marketingOpportunities().map(item => {
-      const days = Math.round(
-        (Date.parse(`${item.date}T12:00:00Z`) - todayTime) / 86400000);
-      const link = links.find(entry => entry.chave === item.key);
-      return {
-        id: `oportunidade-${item.key}`, tipo: "oportunidade",
-        titulo: item.name,
-        mensagem: link
-          ? `Faltam ${days} dias. Verifique o andamento da campanha.`
-          : `Faltam ${days} dias e a campanha ainda não foi planejada.`,
-        data: item.date, dias: days, chave: item.key,
-        id_planejamento: link?.id_planejamento || null
-      };
-    }).filter(item => item.dias >= 0 && item.dias <= 30);
-    const { results: actions } = await db.prepare(`
-      SELECT id,titulo,tipo,status,COALESCE(data_postagem,data_inicio) data_acao
-      FROM planejamento_marketing
-      WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio) IS NOT NULL
-        AND status NOT IN ('Publicado','Encerrado')
-    `).bind(studioId).all();
-    const actionNotifications = actions.map(item => {
-      const days = Math.round(
-        (Date.parse(`${item.data_acao}T12:00:00Z`) - todayTime) / 86400000);
-      return {
-        id: `marketing-${item.id}`, tipo: "marketing", titulo: item.titulo,
-        mensagem: days < 0 ? `Publicação atrasada há ${Math.abs(days)} dias.`
-          : days === 0 ? "A ação está programada para hoje."
-            : `A ação está programada para daqui a ${days} dias.`,
-        data: item.data_acao, dias: days, id_planejamento: item.id
-      };
-    }).filter(item => item.dias >= -30 && item.dias <= 7);
-    return json([...actionNotifications, ...opportunities]
-      .sort((a, b) => a.dias - b.dias));
+    const preferences = await pushPreferenceMap(db, studioId, user.id);
+    const currentAlerts = [
+      ...(await pushAlertItems(db, studioId, today, "morning")),
+      ...(await pushAlertItems(db, studioId, today, "evening")),
+      ...(await pushAlertItems(db, studioId, today, "hourly"))
+    ].filter((item, index, list) =>
+      list.findIndex(candidate => candidate.chave === item.chave) === index &&
+      pushEnabled(item, preferences, item.tipo === "agenda_amanha" ||
+        item.tipo === "confirmacao_pendente" ? "evening" : item.tipo === "agenda_1h" ? "hourly" : "morning")
+    ).map(item => ({
+      id: `atual-${item.chave}`,
+      tipo: item.tipo,
+      titulo: item.titulo,
+      mensagem: item.mensagem,
+      data: today,
+      dias: 0,
+      chave: item.chave,
+      url: item.url,
+      lida: 0,
+      resolvida: 0,
+      atual: true
+    }));
+    const { results: history } = await db.prepare(`
+      SELECT id,tipo,titulo,mensagem,url,data_referencia data,lida,resolvida,status,data_criacao,data_envio
+      FROM push_notificacoes
+      WHERE id_estudio=? AND id_usuario=? AND resolvida=0
+      ORDER BY lida ASC,data_criacao DESC LIMIT 60
+    `).bind(studioId, user.id).all();
+    let marketingItems = [];
+    if (enabledModules.has("marketing")) {
+      const todayTime = Date.parse(`${today}T12:00:00Z`);
+      const { results: links } = await db.prepare(`
+        SELECT mop.chave,mop.id_planejamento,pm.status
+        FROM marketing_oportunidade_planos mop
+        LEFT JOIN planejamento_marketing pm ON pm.id=mop.id_planejamento
+        WHERE mop.id_estudio=?
+      `).bind(studioId).all();
+      marketingItems = marketingOpportunities().map(item => {
+        const days = Math.round((Date.parse(`${item.date}T12:00:00Z`) - todayTime) / 86400000);
+        const link = links.find(entry => entry.chave === item.key);
+        return {
+          id: `oportunidade-${item.key}`, tipo: "marketing", titulo: item.name,
+          mensagem: link ? `Faltam ${days} dias. Verifique o andamento da campanha.`
+            : `Faltam ${days} dias e a campanha ainda nao foi planejada.`,
+          data: item.date, dias: days, chave: item.key,
+          id_planejamento: link?.id_planejamento || null,
+          url: "/#marketing", lida: 0, resolvida: 0, atual: true
+        };
+      }).filter(item => item.dias >= 0 && item.dias <= 30 &&
+        pushEnabled({ tipo: "marketing" }, preferences, "morning"));
+    }
+    const combined = [...currentAlerts, ...history, ...marketingItems]
+      .filter((item, index, list) =>
+        list.findIndex(candidate => String(candidate.chave || candidate.id) === String(item.chave || item.id)) === index)
+      .sort((a, b) => Number(a.lida || 0) - Number(b.lida || 0) ||
+        String(b.data || "").localeCompare(String(a.data || "")));
+    return json({ itens: combined, preferencias: [...preferences.values()] });
   }
   if (url.pathname === "/api/marketing" && request.method === "GET") {
     const { results } = await db.prepare(`

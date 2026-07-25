@@ -113,6 +113,7 @@ let marketingData = [];
 let marketingArtData = "";
 let marketingOpportunities = [];
 let notificationsData = [];
+let notificationPreferences = [];
 let sessionUser = null;
 let studiosData = [];
 let pullRefreshSetup = false;
@@ -637,11 +638,20 @@ async function openMarketingRecord(id) {
   openMarketingPlan(id);
 }
 
+function openAppUrl(url = "") {
+  const page = String(url).split("#")[1] || "agenda";
+  const nav = $(`.nav-link[data-page="${page}"]`);
+  if (nav && !nav.hidden) nav.click();
+}
+
 async function loadNotifications() {
-  notificationsData = await api("/api/notificacoes");
+  const data = await api("/api/notificacoes");
+  notificationsData = Array.isArray(data) ? data : data.itens || [];
+  notificationPreferences = Array.isArray(data) ? [] : data.preferencias || [];
   const badge = $("#notificationBadge");
-  badge.textContent = notificationsData.length;
-  badge.hidden = notificationsData.length === 0;
+  const pending = notificationsData.filter(item => !Number(item.lida)).length;
+  badge.textContent = pending;
+  badge.hidden = pending === 0;
 }
 
 function openNotifications() {
@@ -650,10 +660,22 @@ function openNotifications() {
     : permission === "denied" ? "Notificacoes bloqueadas no aparelho. Libere nas configuracoes do iPhone."
       : pushSupported() ? "Ative para receber alertas de agenda, financeiro, pos-venda e marketing."
         : "Este navegador nao suporta notificacoes PWA.";
-  const rows = notificationsData.map(item => `<button class="notification-item" type="button" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
-    <span class="notification-icon">${item.dias < 0 ? "!" : item.tipo === "oportunidade" ? "*" : "-"}</span>
-    <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} - ${dateBr(item.data)}</small></span>
-  </button>`).join("") || `<div class="card muted">Nenhuma notificacao interna no momento.</div>`;
+  const preferences = notificationPreferences.map(item => `<label class="notification-preference">
+    <span><strong>${escapeHtml(item.rotulo)}</strong><small>${item.horario === "both" ? "Manha e noite" : item.horario === "evening" ? "Noite" : "Manha"}</small></span>
+    <input type="checkbox" data-notification-preference="${escapeHtml(item.tipo)}" data-horario="${escapeHtml(item.horario)}" ${Number(item.ativo) ? "checked" : ""}>
+  </label>`).join("");
+  const rows = notificationsData.map(item => {
+    const storedId = /^\d+$/.test(String(item.id || "")) ? item.id : "";
+    return `<article class="notification-item ${Number(item.lida) ? "is-read" : ""}" data-notification-id="${storedId}" data-notification-url="${escapeHtml(item.url || "")}" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
+      <button class="notification-main" type="button">
+        <span class="notification-icon">${Number(item.lida) ? "✓" : item.dias < 0 ? "!" : item.tipo === "marketing" ? "*" : "-"}</span>
+        <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} - ${dateBr(item.data)}</small></span>
+      </button>
+      ${storedId ? `<button class="secondary notification-resolve" type="button" data-resolve-notification="${storedId}">Resolver</button>` : ""}
+    </article>`;
+  }).join("") || `<div class="card muted">Nenhuma notificacao interna no momento.</div>`;
+  const dialog = $("#actionDialog");
+  if (dialog.open) dialog.close();
   $("#actionContent").innerHTML = `<header><h2>Notificacoes</h2><button class="close" type="button">X</button></header>
     <div class="card push-card"><strong>Notificacoes do app</strong><small class="muted">${escapeHtml(pushText)}</small>
       <div class="card-actions">
@@ -661,8 +683,13 @@ function openNotifications() {
         <button class="secondary" type="button" data-test-push ${permission !== "granted" ? "disabled" : ""}>Enviar teste</button>
       </div>
     </div>
+    ${preferences ? `<details class="card notification-settings"><summary>Preferencias de alerta</summary>
+      <form id="notificationPreferencesForm" class="notification-preferences">${preferences}
+        <button class="secondary" type="submit">Salvar preferencias</button>
+      </form>
+    </details>` : ""}
     <div class="notification-list">${rows}</div>`;
-  $("#actionDialog").showModal();
+  dialog.showModal();
 }
 
 function openMarketingPlan(itemId = "") {
@@ -2063,13 +2090,39 @@ document.addEventListener("click", event => {
       .catch(() => toast("Não foi possível copiar a legenda."));
   }
   const notification = event.target.closest(".notification-item");
-  if (notification) {
+  if (notification && !event.target.closest("[data-resolve-notification]")) {
     $("#actionDialog").close();
+    if (notification.dataset.notificationId) {
+      api(`/api/notificacoes/${notification.dataset.notificationId}/lida`, { method: "POST" })
+        .then(loadNotifications).catch(() => {});
+    }
     if (notification.dataset.notificationPlan) {
       openMarketingRecord(notification.dataset.notificationPlan);
     } else {
-      $(`.nav-link[data-page="marketing"]`)?.click();
+      openAppUrl(notification.dataset.notificationUrl);
     }
+  }
+  const resolveNotification = event.target.closest("[data-resolve-notification]");
+  if (resolveNotification) {
+    api(`/api/notificacoes/${resolveNotification.dataset.resolveNotification}/resolver`, { method: "POST" })
+      .then(async () => { await loadNotifications(); openNotifications(); })
+      .catch(error => toast(error.message));
+  }
+  const notificationPreferencesForm = event.target.closest("#notificationPreferencesForm button[type=submit]");
+  if (notificationPreferencesForm) {
+    event.preventDefault();
+    const form = notificationPreferencesForm.closest("form");
+    const preferencias = $$("[data-notification-preference]", form).map(input => ({
+      tipo: input.dataset.notificationPreference,
+      ativo: input.checked ? 1 : 0,
+      horario: input.dataset.horario || "both"
+    }));
+    api("/api/notificacoes/preferencias", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preferencias })
+    }).then(async () => { toast("Preferencias salvas."); await loadNotifications(); openNotifications(); })
+      .catch(error => toast(error.message));
   }
   if (event.target.closest("[data-enable-push]")) {
     enablePushNotifications()
@@ -2267,6 +2320,7 @@ function clearApplicationState() {
   marketingArtData = "";
   marketingOpportunities = [];
   notificationsData = [];
+  notificationPreferences = [];
   studiosData = [];
   $$("dialog[open]").forEach(dialog => dialog.close());
   $("#appointmentForm")?.reset();
@@ -2329,14 +2383,17 @@ async function startApplication(user) {
   if (applicationStarted) return;
   applicationStarted = true;
   registerServiceWorker().catch(() => {});
-  if (hasModule("marketing")) loadNotifications().catch(() => {});
+  loadNotifications().catch(() => {});
   api("/api/perfil").then(profile => displayAccountPhoto(profile.foto_perfil))
     .catch(() => {});
   setupPullToRefresh();
   try {
+    const hashPage = location.hash.replace("#", "");
+    const hashNav = hashPage ? $(`.nav-link[data-page="${hashPage}"]`) : null;
     const savedPage = sessionStorage.getItem("activePage");
     const savedNav = savedPage ? $(`.nav-link[data-page="${savedPage}"]`) : null;
-    if (savedNav && !savedNav.hidden && savedPage !== "agenda") savedNav.click();
+    if (hashNav && !hashNav.hidden && hashPage !== "agenda") hashNav.click();
+    else if (savedNav && !savedNav.hidden && savedPage !== "agenda") savedNav.click();
     else if ($(`.nav-link[data-page="agenda"]`)?.hidden) {
       $$(".nav-link[data-page]").find(nav => !nav.hidden)?.click();
     }
