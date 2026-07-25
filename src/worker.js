@@ -407,6 +407,260 @@ async function sendDailyWhatsAppSummaries(env) {
   }
 }
 
+const textEncoder = new TextEncoder();
+const base64UrlToBytes = value => base64ToBytes(
+  String(value || "").replace(/-/g, "+").replace(/_/g, "/")
+    .padEnd(Math.ceil(String(value || "").length / 4) * 4, "=")
+);
+const bytesToBase64Url = bytes => bytesToBase64(bytes)
+  .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+const concatBytes = (...arrays) => {
+  const output = new Uint8Array(arrays.reduce((sum, item) => sum + item.length, 0));
+  let offset = 0;
+  for (const item of arrays) {
+    output.set(item, offset);
+    offset += item.length;
+  }
+  return output;
+};
+const uint32Bytes = value => new Uint8Array([
+  (value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255
+]);
+async function hkdfExtract(salt, inputKeyMaterial) {
+  const key = await crypto.subtle.importKey("raw", salt, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, inputKeyMaterial));
+}
+async function hkdfExpand(prk, info, length) {
+  const key = await crypto.subtle.importKey("raw", prk, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  let previous = new Uint8Array();
+  let output = new Uint8Array();
+  let counter = 1;
+  while (output.length < length) {
+    previous = new Uint8Array(await crypto.subtle.sign("HMAC", key,
+      concatBytes(previous, info, new Uint8Array([counter++]))));
+    output = concatBytes(output, previous);
+  }
+  return output.slice(0, length);
+}
+async function importVapidPrivateKey(publicKey, privateKey) {
+  const publicBytes = base64UrlToBytes(publicKey);
+  const privateBytes = base64UrlToBytes(privateKey);
+  const jwk = {
+    kty: "EC", crv: "P-256",
+    x: bytesToBase64Url(publicBytes.slice(1, 33)),
+    y: bytesToBase64Url(publicBytes.slice(33, 65)),
+    d: bytesToBase64Url(privateBytes),
+    ext: true
+  };
+  return crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" },
+    false, ["sign"]);
+}
+async function vapidAuthorization(endpoint, env) {
+  if (!env.PUSH_VAPID_PUBLIC_KEY || !env.PUSH_VAPID_PRIVATE_KEY) return null;
+  const origin = new URL(endpoint).origin;
+  const header = bytesToBase64Url(textEncoder.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const payload = bytesToBase64Url(textEncoder.encode(JSON.stringify({
+    aud: origin,
+    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
+    sub: env.PUSH_VAPID_SUBJECT || "mailto:joao.abner14@gmail.com"
+  })));
+  const key = await importVapidPrivateKey(env.PUSH_VAPID_PUBLIC_KEY, env.PUSH_VAPID_PRIVATE_KEY);
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" }, key, textEncoder.encode(`${header}.${payload}`)
+  ));
+  return `vapid t=${header}.${payload}.${bytesToBase64Url(signature)}, k=${env.PUSH_VAPID_PUBLIC_KEY}`;
+}
+async function encryptedPushBody(subscription, payload) {
+  const userPublicKey = base64UrlToBytes(subscription.p256dh);
+  const authSecret = base64UrlToBytes(subscription.auth);
+  const serverKeys = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]
+  );
+  const serverPublicKey = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeys.publicKey));
+  const importedUserKey = await crypto.subtle.importKey(
+    "raw", userPublicKey, { name: "ECDH", namedCurve: "P-256" }, false, []
+  );
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: "ECDH", public: importedUserKey }, serverKeys.privateKey, 256
+  ));
+  const keyInfo = concatBytes(
+    textEncoder.encode("WebPush: info\0"), userPublicKey, serverPublicKey
+  );
+  const ikm = await hkdfExpand(await hkdfExtract(authSecret, sharedSecret), keyInfo, 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const prk = await hkdfExtract(salt, ikm);
+  const cek = await hkdfExpand(prk, textEncoder.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdfExpand(prk, textEncoder.encode("Content-Encoding: nonce\0"), 12);
+  const cryptoKey = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const plaintext = concatBytes(textEncoder.encode(JSON.stringify(payload)), new Uint8Array([2]));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce }, cryptoKey, plaintext
+  ));
+  return concatBytes(salt, uint32Bytes(4096), new Uint8Array([serverPublicKey.length]),
+    serverPublicKey, ciphertext);
+}
+async function sendPushNotification(env, subscription, payload) {
+  const authorization = await vapidAuthorization(subscription.endpoint, env);
+  if (!authorization) throw new Error("Chaves VAPID não configuradas.");
+  const response = await fetch(subscription.endpoint, {
+    method: "POST",
+    headers: {
+      "TTL": "86400",
+      "Urgency": payload.urgency || "normal",
+      "Content-Encoding": "aes128gcm",
+      "Content-Type": "application/octet-stream",
+      "Authorization": authorization
+    },
+    body: await encryptedPushBody(subscription, payload)
+  });
+  if (!response.ok && ![404, 410].includes(response.status)) {
+    throw new Error(`Push recusado: ${response.status} ${await response.text()}`);
+  }
+  return response;
+}
+async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morning") {
+  const tomorrow = addDays(date, 1);
+  const alerts = [];
+  if (mode === "evening") {
+    const { results } = await db.prepare(`
+      SELECT a.id,a.data_hora,c.nome
+      FROM agendamentos a JOIN clientes c ON c.id=a.id_cliente
+      WHERE a.id_estudio=? AND substr(a.data_hora,1,10)=?
+        AND lower(a.status) NOT IN ('cancelado','concluido')
+      ORDER BY a.data_hora
+    `).bind(studioId, tomorrow).all();
+    if (results.length) alerts.push({
+      chave: `agenda-amanha-${tomorrow}`,
+      tipo: "agenda",
+      titulo: `${results.length} sessão(ões) amanhã`,
+      mensagem: results.slice(0, 3).map(item =>
+        `${brDateTime(item.data_hora)} · ${item.nome}`).join("\n"),
+      url: "/#agenda"
+    });
+    return alerts;
+  }
+  const summary = await dailyWhatsAppSummary(db, studioId, date);
+  if (summary.agendamentos_hoje?.length) alerts.push({
+    chave: `agenda-hoje-${date}`,
+    tipo: "agenda",
+    titulo: `${summary.agendamentos_hoje.length} sessão(ões) hoje`,
+    mensagem: summary.agendamentos_hoje.slice(0, 3).map(item =>
+      `${brDateTime(item.data_hora)} · ${item.nome}`).join("\n"),
+    url: "/#agenda",
+    urgency: "high"
+  });
+  if (summary.parcelas_atrasadas?.length) alerts.push({
+    chave: `crediario-atrasado-${date}`,
+    tipo: "financeiro",
+    titulo: `${summary.parcelas_atrasadas.length} parcela(s) atrasada(s)`,
+    mensagem: `Total em atraso: ${moneyText(summary.total_atrasado || 0)}`,
+    url: "/#financeiro",
+    urgency: "high"
+  });
+  const { results: bills } = await db.prepare(`
+    SELECT descricao,valor,data_vencimento FROM gestao_financeira
+    WHERE id_estudio=? AND status='Pendente' AND data_vencimento<=?
+    ORDER BY data_vencimento,valor DESC
+  `).bind(studioId, date).all();
+  if (bills.length) alerts.push({
+    chave: `contas-abertas-${date}`,
+    tipo: "financeiro",
+    titulo: `${bills.length} conta(s) em aberto`,
+    mensagem: bills.slice(0, 3).map(item =>
+      `${item.data_vencimento < date ? "Vencida" : "Vence hoje"} · ${item.descricao} · ${moneyText(item.valor)}`
+    ).join("\n"),
+    url: "/#financeiro",
+    urgency: bills.some(item => item.data_vencimento < date) ? "high" : "normal"
+  });
+  const { results: postSales } = await db.prepare(`
+    SELECT pv.id,pv.dias_apos,pv.id_os,c.nome
+    FROM pos_venda_tarefas pv JOIN clientes c ON c.id=pv.id_cliente
+    WHERE pv.id_estudio=? AND pv.status='Pendente' AND pv.data_tarefa<=?
+    ORDER BY pv.data_tarefa
+  `).bind(studioId, date).all();
+  if (postSales.length) alerts.push({
+    chave: `pos-venda-${date}`,
+    tipo: "pos_venda",
+    titulo: `${postSales.length} pós-venda pendente(s)`,
+    mensagem: postSales.slice(0, 3).map(item =>
+      `${item.dias_apos} dias · OS #${item.id_os} · ${item.nome}`).join("\n"),
+    url: "/#agenda"
+  });
+  const { results: marketing } = await db.prepare(`
+    SELECT id,titulo,COALESCE(data_postagem,data_inicio) data_acao
+    FROM planejamento_marketing
+    WHERE id_estudio=? AND COALESCE(data_postagem,data_inicio)<=?
+      AND status NOT IN ('Publicado','Encerrado')
+    ORDER BY data_acao,id
+  `).bind(studioId, date).all();
+  if (marketing.length) alerts.push({
+    chave: `marketing-${date}`,
+    tipo: "marketing",
+    titulo: `${marketing.length} ação(ões) de marketing`,
+    mensagem: marketing.slice(0, 3).map(item =>
+      `${dateBr(item.data_acao)} · ${item.titulo}`).join("\n"),
+    url: "/#marketing"
+  });
+  return alerts;
+}
+async function sendStudioPushAlerts(env, studio, mode) {
+  const date = saoPauloDate();
+  const alerts = await pushAlertItems(env.DB, studio.id, date, mode);
+  if (!alerts.length) return;
+  const { results: subscriptions } = await env.DB.prepare(`
+    SELECT * FROM push_inscricoes
+    WHERE id_estudio=? AND ativo=1
+  `).bind(studio.id).all();
+  for (const subscription of subscriptions) {
+    for (const alert of alerts) {
+      const existing = await env.DB.prepare(`
+        SELECT id FROM push_notificacoes
+        WHERE id_estudio=? AND id_inscricao=? AND chave=? AND data_referencia=?
+      `).bind(studio.id, subscription.id, alert.chave, date).first();
+      if (existing) continue;
+      const inserted = await env.DB.prepare(`
+        INSERT INTO push_notificacoes
+          (id_estudio,id_usuario,id_inscricao,chave,tipo,titulo,mensagem,url,data_referencia)
+        VALUES(?,?,?,?,?,?,?,?,?)
+      `).bind(studio.id, subscription.id_usuario, subscription.id, alert.chave,
+        alert.tipo, alert.titulo, alert.mensagem, alert.url, date).run();
+      try {
+        const response = await sendPushNotification(env, subscription, {
+          title: alert.titulo,
+          body: alert.mensagem,
+          url: alert.url,
+          tag: alert.chave,
+          urgency: alert.urgency
+        });
+        await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE push_notificacoes SET status='Enviado',resposta=?,data_envio=CURRENT_TIMESTAMP
+            WHERE id=?
+          `).bind(`HTTP ${response.status}`, inserted.meta.last_row_id),
+          env.DB.prepare("UPDATE push_inscricoes SET ultimo_uso=CURRENT_TIMESTAMP WHERE id=?")
+            .bind(subscription.id)
+        ]);
+      } catch (cause) {
+        await env.DB.prepare(`
+          UPDATE push_notificacoes SET status='Erro',resposta=? WHERE id=?
+        `).bind(String(cause.message || cause).slice(0, 2000),
+          inserted.meta.last_row_id).run();
+      }
+    }
+  }
+}
+async function sendScheduledPushAlerts(env) {
+  const hour = Number(saoPauloHour());
+  const mode = hour >= 18 ? "evening" : hour >= 7 && hour <= 10 ? "morning" : "";
+  if (!mode) return;
+  const { results: studios } = await env.DB.prepare(`
+    SELECT DISTINCT e.id FROM estudios e
+    JOIN push_inscricoes pi ON pi.id_estudio=e.id AND pi.ativo=1
+    WHERE e.ativo=1
+  `).all();
+  for (const studio of studios) await sendStudioPushAlerts(env, studio, mode);
+}
+
 async function listAppointments(db, url, studioId, studioName, enabledModules) {
   const listMode = url.searchParams.get("tipo") === "lista";
   const rangeStart = validDate(url.searchParams.get("start")) ? url.searchParams.get("start") : "";
@@ -3056,6 +3310,7 @@ async function authApi(db, request, url) {
 }
 
 function requiredModules(pathname) {
+  if (pathname.startsWith("/api/push")) return [];
   if (pathname === "/api/lgpd") return ["clientes"];
   if (pathname === "/api/notificacoes" || pathname.startsWith("/api/marketing"))
     return ["marketing"];
@@ -3086,6 +3341,70 @@ async function api(request, env, url, user) {
   const missingModule = requiredModules(url.pathname)
     .find(module => !enabledModules.has(module));
   if (missingModule) return error("Este módulo não está habilitado para o estúdio.", 403);
+  if (url.pathname === "/api/push/chave" && request.method === "GET") {
+    return json({
+      configurado: Boolean(env.PUSH_VAPID_PUBLIC_KEY && env.PUSH_VAPID_PRIVATE_KEY),
+      chave_publica: env.PUSH_VAPID_PUBLIC_KEY || ""
+    });
+  }
+  if (url.pathname === "/api/push/inscricao") {
+    if (request.method === "GET") {
+      const { results } = await db.prepare(`
+        SELECT id,endpoint,ativo,ultimo_uso,data_atualizacao
+        FROM push_inscricoes
+        WHERE id_usuario=? AND id_estudio=? AND ativo=1
+        ORDER BY data_atualizacao DESC
+      `).bind(user.id, studioId).all();
+      return json(results);
+    }
+    if (request.method === "POST") {
+      const data = await body(request);
+      const endpoint = required(data.endpoint, "endpoint");
+      const keys = data.keys || {};
+      const p256dh = required(keys.p256dh, "chave do aparelho");
+      const auth = required(keys.auth, "autenticação do aparelho");
+      await db.prepare(`
+        INSERT INTO push_inscricoes
+          (id_estudio,id_usuario,endpoint,p256dh,auth,user_agent,ativo,data_atualizacao)
+        VALUES(?,?,?,?,?,?,1,CURRENT_TIMESTAMP)
+        ON CONFLICT(endpoint) DO UPDATE SET id_estudio=excluded.id_estudio,
+          id_usuario=excluded.id_usuario,p256dh=excluded.p256dh,auth=excluded.auth,
+          user_agent=excluded.user_agent,ativo=1,data_atualizacao=CURRENT_TIMESTAMP
+      `).bind(studioId, user.id, endpoint, p256dh, auth,
+        (request.headers.get("user-agent") || "").slice(0, 500)).run();
+      return json({ ok: true });
+    }
+    if (request.method === "DELETE") {
+      const data = await body(request);
+      await db.prepare(`
+        UPDATE push_inscricoes SET ativo=0,data_atualizacao=CURRENT_TIMESTAMP
+        WHERE endpoint=? AND id_usuario=? AND id_estudio=?
+      `).bind(String(data.endpoint || ""), user.id, studioId).run();
+      return json({ ok: true });
+    }
+  }
+  if (url.pathname === "/api/push/teste" && request.method === "POST") {
+    const { results: subscriptions } = await db.prepare(`
+      SELECT * FROM push_inscricoes
+      WHERE id_usuario=? AND id_estudio=? AND ativo=1
+      ORDER BY data_atualizacao DESC LIMIT 3
+    `).bind(user.id, studioId).all();
+    if (!subscriptions.length) return error("Nenhum aparelho com notificação ativa.");
+    let sent = 0;
+    for (const subscription of subscriptions) {
+      const response = await sendPushNotification(env, subscription, {
+        title: "Notificações ativadas",
+        body: "Seu app já pode receber alertas do estúdio.",
+        url: "/#agenda",
+        tag: `teste-${user.id}-${Date.now()}`
+      });
+      if ([404, 410].includes(response.status)) {
+        await db.prepare("UPDATE push_inscricoes SET ativo=0 WHERE id=?")
+          .bind(subscription.id).run();
+      } else sent++;
+    }
+    return json({ ok: true, enviados: sent });
+  }
   if (url.pathname === "/api/estudio/exportar" && request.method === "GET") {
     if (user.papel !== "SUPERADMIN" && user.perfil_acesso !== "ADMINISTRADOR") {
       return error("Somente o administrador do estúdio pode exportar os dados.", 403);
@@ -3625,7 +3944,8 @@ export default {
       }
       const response = await env.ASSETS.fetch(request);
       const headers = new Headers(response.headers);
-      if (url.pathname === "/" || /\.(?:html|js|css)$/.test(url.pathname)) {
+      if (url.pathname === "/" || url.pathname === "/sw.js" ||
+        url.pathname === "/manifest.webmanifest" || /\.(?:html|js|css)$/.test(url.pathname)) {
         headers.set("cache-control", "no-cache, must-revalidate");
       }
       applySecurityHeaders(headers);
@@ -3641,5 +3961,6 @@ export default {
   },
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(sendDailyWhatsAppSummaries(env));
+    ctx.waitUntil(sendScheduledPushAlerts(env));
   }
 };

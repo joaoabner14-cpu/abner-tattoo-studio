@@ -118,6 +118,38 @@ let studiosData = [];
 let pullRefreshSetup = false;
 let sessionAbortController = new AbortController();
 const hasModule = module => Boolean(sessionUser?.modulos?.includes(module));
+const pushSupported = () => "serviceWorker" in navigator &&
+  "PushManager" in window && "Notification" in window;
+const base64UrlToUint8Array = value => {
+  const padded = String(value || "").padEnd(Math.ceil(String(value || "").length / 4) * 4, "=");
+  const binary = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+};
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  return navigator.serviceWorker.register("/sw.js");
+}
+async function enablePushNotifications() {
+  if (!pushSupported()) throw new Error("Este aparelho nÃ£o suporta notificaÃ§Ãµes do PWA.");
+  const key = await api("/api/push/chave");
+  if (!key.configurado || !key.chave_publica) {
+    throw new Error("As chaves de notificaÃ§Ã£o ainda nÃ£o estÃ£o configuradas no servidor.");
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("PermissÃ£o de notificaÃ§Ã£o nÃ£o concedida.");
+  const registration = await registerServiceWorker();
+  const current = await registration.pushManager.getSubscription();
+  if (current) await current.unsubscribe();
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: base64UrlToUint8Array(key.chave_publica)
+  });
+  await post("/api/push/inscricao", subscription.toJSON());
+  return subscription;
+}
+async function sendPushTest() {
+  await post("/api/push/teste");
+}
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -613,11 +645,22 @@ async function loadNotifications() {
 }
 
 function openNotifications() {
+  const permission = pushSupported() ? Notification.permission : "unsupported";
+  const pushText = permission === "granted" ? "Notificacoes do app ativas neste aparelho."
+    : permission === "denied" ? "Notificacoes bloqueadas no aparelho. Libere nas configuracoes do iPhone."
+      : pushSupported() ? "Ative para receber alertas de agenda, financeiro, pos-venda e marketing."
+        : "Este navegador nao suporta notificacoes PWA.";
   const rows = notificationsData.map(item => `<button class="notification-item" type="button" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
-    <span class="notification-icon">${item.dias < 0 ? "!" : item.tipo === "oportunidade" ? "★" : "•"}</span>
-    <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} · ${dateBr(item.data)}</small></span>
-  </button>`).join("") || `<div class="card muted">Nenhuma notificação de marketing.</div>`;
-  $("#actionContent").innerHTML = `<header><h2>Notificações</h2><button class="close" type="button">×</button></header>
+    <span class="notification-icon">${item.dias < 0 ? "!" : item.tipo === "oportunidade" ? "*" : "-"}</span>
+    <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} - ${dateBr(item.data)}</small></span>
+  </button>`).join("") || `<div class="card muted">Nenhuma notificacao interna no momento.</div>`;
+  $("#actionContent").innerHTML = `<header><h2>Notificacoes</h2><button class="close" type="button">X</button></header>
+    <div class="card push-card"><strong>Notificacoes do app</strong><small class="muted">${escapeHtml(pushText)}</small>
+      <div class="card-actions">
+        <button class="primary" type="button" data-enable-push ${!pushSupported() || permission === "denied" ? "disabled" : ""}>Ativar neste aparelho</button>
+        <button class="secondary" type="button" data-test-push ${permission !== "granted" ? "disabled" : ""}>Enviar teste</button>
+      </div>
+    </div>
     <div class="notification-list">${rows}</div>`;
   $("#actionDialog").showModal();
 }
@@ -2028,6 +2071,16 @@ document.addEventListener("click", event => {
       $(`.nav-link[data-page="marketing"]`)?.click();
     }
   }
+  if (event.target.closest("[data-enable-push]")) {
+    enablePushNotifications()
+      .then(() => { toast("Notificações ativadas neste aparelho."); openNotifications(); })
+      .catch(error => toast(error.message));
+  }
+  if (event.target.closest("[data-test-push]")) {
+    sendPushTest()
+      .then(() => toast("Notificação de teste enviada."))
+      .catch(error => toast(error.message));
+  }
   const managementAction = event.target.closest("[data-management-action]");
   if (managementAction) openManagementAction(managementAction.dataset.managementAction);
   if (event.target.closest("[data-management-initial-balance]")) openManagementInitialBalance();
@@ -2267,7 +2320,7 @@ async function startApplication(user) {
     $$("[data-module]").forEach(element => {
       element.hidden = !hasModule(element.dataset.module);
     });
-    $("#notificationButton").hidden = !hasModule("marketing");
+    $("#notificationButton").hidden = false;
     $("#homeFinanceSection").hidden = !hasModule("financeiro");
   }
   try { localStorage.setItem("studio_authenticated", "1"); } catch {}
@@ -2275,6 +2328,7 @@ async function startApplication(user) {
   document.body.classList.add("authenticated");
   if (applicationStarted) return;
   applicationStarted = true;
+  registerServiceWorker().catch(() => {});
   if (hasModule("marketing")) loadNotifications().catch(() => {});
   api("/api/perfil").then(profile => displayAccountPhoto(profile.foto_perfil))
     .catch(() => {});
