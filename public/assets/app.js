@@ -678,36 +678,42 @@ async function openNotificationResolver(typeOrUrl = "") {
   };
   const items = data.itens || [];
   let rows = "";
+  const swipeRow = (content, actions, extraClass = "") => `<article class="card swipe-action-item ${extraClass}">
+    <div class="swipe-actions">${actions}</div>
+    <div class="swipe-main">${content}</div>
+  </article>`;
   if (type === "crediario_vencido") {
-    rows = items.map(x => `<article class="card overdue-card">
-      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>
-      <div class="card-actions"><a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button></div>
-    </article>`).join("");
+    rows = items.map(x => swipeRow(
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} ? ${money(x.valor)} ? venceu ${dateBr(x.vencimento)}</div></div>`,
+      `<a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button>`,
+      "overdue-card"
+    )).join("");
   } else if (type === "sinal_pendente") {
-    rows = items.map(x => `<article class="card card-head">
-      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${money(x.valor)}</div></div>
-      <button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button>
-    </article>`).join("");
+    rows = items.map(x => swipeRow(
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} ? ${money(x.valor)}</div></div>`,
+      `<button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button>`
+    )).join("");
   } else if (["agenda_hoje", "agenda_amanha", "agenda_1h", "confirmacao_pendente"].includes(type)) {
-    rows = items.map(x => `<article class="card card-head">
-      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${escapeHtml(x.status)}${x.tatuador ? ` · ${escapeHtml(x.tatuador)}` : ""}</div></div>
-      <div class="card-actions"><button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<a class="primary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Confirmar</a>` : ""}</div>
-    </article>`).join("");
+    rows = items.map(x => swipeRow(
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} ? ${escapeHtml(x.status)}${x.tatuador ? ` ? ${escapeHtml(x.tatuador)}` : ""}</div></div>`,
+      `<button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<a class="primary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Confirmar</a>` : ""}`
+    )).join("");
   } else if (type === "pos_venda") {
-    rows = items.map(x => `<article class="card card-head">
-      <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.dias_apos} dias · OS #${x.id_os} · tarefa para ${dateBr(x.data_tarefa)}</div></div>
-      <button class="primary" data-open-post-sale="${x.id}">Resolver</button>
-    </article>`).join("");
+    rows = items.map(x => swipeRow(
+      `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.dias_apos} dias ? OS #${x.id_os} ? tarefa para ${dateBr(x.data_tarefa)}</div></div>`,
+      `<button class="primary" data-open-post-sale="${x.id}">Resolver</button>`
+    )).join("");
   } else if (type === "contas_abertas") {
-    rows = items.map(x => `<article class="card management-pending ${x.data_vencimento < todaySp() ? "is-overdue" : ""}">
-      <div><strong>${escapeHtml(x.descricao)}</strong><div class="muted">${escapeHtml(x.tipo)} · ${escapeHtml(x.categoria)} · vence ${dateBr(x.data_vencimento)}</div></div>
-      <div><strong>${money(x.valor)}</strong><button class="primary pay-management" data-id="${x.id}" data-value="${x.valor}">Dar baixa</button></div>
-    </article>`).join("");
+    rows = items.map(x => swipeRow(
+      `<div><strong>${escapeHtml(x.descricao)}</strong><div class="muted">${escapeHtml(x.tipo)} ? ${escapeHtml(x.categoria)} ? vence ${dateBr(x.data_vencimento)}</div><strong>${money(x.valor)}</strong></div>`,
+      `<button class="primary pay-management" data-id="${x.id}" data-value="${x.valor}">Dar baixa</button>`,
+      x.data_vencimento < todaySp() ? "is-overdue" : ""
+    )).join("");
   } else if (type === "marketing") {
-    rows = items.map(x => `<article class="card card-head">
-      <div><strong>${escapeHtml(x.titulo)}</strong><div class="muted">${escapeHtml(x.tipo)} · ${escapeHtml(x.status)} · ${dateBr(x.data_acao)}</div></div>
-      <button class="primary" data-marketing-action="edit" data-id="${x.id}">Abrir</button>
-    </article>`).join("");
+    rows = items.map(x => swipeRow(
+      `<div><strong>${escapeHtml(x.titulo)}</strong><div class="muted">${escapeHtml(x.tipo)} ? ${escapeHtml(x.status)} ? ${dateBr(x.data_acao)}</div></div>`,
+      `<button class="primary" data-marketing-action="edit" data-id="${x.id}">Abrir</button>`
+    )).join("");
   }
   if (!rows) rows = `<div class="card muted">Nenhuma pendência encontrada para este alerta.</div>`;
   const dialog = $("#actionDialog");
@@ -768,10 +774,10 @@ function openNotifications() {
 
 let notificationSwipe = null;
 function closeNotificationSwipes(except = null) {
-  $$(".notification-item.is-swiped").forEach(item => {
+  $$(".notification-item.is-swiped,.swipe-action-item.is-swiped").forEach(item => {
     if (item === except) return;
     item.classList.remove("is-swiped", "is-swiping");
-    $(".notification-main", item)?.style.removeProperty("transform");
+    $(".notification-main,.swipe-main", item)?.style.removeProperty("transform");
   });
 }
 
@@ -2034,12 +2040,14 @@ document.addEventListener("input", event => {
 });
 
 document.addEventListener("pointerdown", event => {
-  const item = event.target.closest(".notification-item");
-  if (!item || !item.querySelector("[data-resolve-notification]") ||
-    event.target.closest("[data-resolve-notification]")) return;
+  const item = event.target.closest(".notification-item,.swipe-action-item");
+  if (!item || event.target.closest(".notification-actions,.swipe-actions")) return;
+  const actions = $(".notification-actions,.swipe-actions", item);
+  if (!actions) return;
   closeNotificationSwipes(item);
   notificationSwipe = {
     item,
+    actions,
     startX: event.clientX,
     startY: event.clientY,
     dx: 0,
@@ -2062,8 +2070,9 @@ document.addEventListener("pointermove", event => {
   }
   if (Math.abs(dx) < 6) return;
   notificationSwipe.dx = dx;
-  const translate = Math.max(-108, Math.min(0, dx));
-  $(".notification-main", notificationSwipe.item).style.transform = `translateX(${translate}px)`;
+  const limit = Math.max(108, notificationSwipe.actions.offsetWidth || 108);
+  const translate = Math.max(-limit, Math.min(0, dx));
+  $(".notification-main,.swipe-main", notificationSwipe.item).style.transform = `translateX(${translate}px)`;
 });
 
 document.addEventListener("pointerup", event => {
@@ -2072,12 +2081,14 @@ document.addEventListener("pointerup", event => {
   item.classList.remove("is-swiping");
   item.dataset.swipeSuppress = Math.abs(dx) > 8 ? "1" : "";
   setTimeout(() => { delete item.dataset.swipeSuppress; }, 180);
+  const limit = Math.max(108, notificationSwipe.actions.offsetWidth || 108);
+  item.style.setProperty("--swipe-width", `${limit}px`);
   if (dx <= -48) {
     item.classList.add("is-swiped");
-    $(".notification-main", item).style.removeProperty("transform");
+    $(".notification-main,.swipe-main", item).style.removeProperty("transform");
   } else {
     item.classList.remove("is-swiped");
-    $(".notification-main", item).style.removeProperty("transform");
+    $(".notification-main,.swipe-main", item).style.removeProperty("transform");
   }
   notificationSwipe = null;
 });
@@ -2085,12 +2096,12 @@ document.addEventListener("pointerup", event => {
 document.addEventListener("pointercancel", () => {
   if (!notificationSwipe) return;
   notificationSwipe.item.classList.remove("is-swiping");
-  $(".notification-main", notificationSwipe.item)?.style.removeProperty("transform");
+  $(".notification-main,.swipe-main", notificationSwipe.item)?.style.removeProperty("transform");
   notificationSwipe = null;
 });
 
 document.addEventListener("click", event => {
-  if (!event.target.closest(".notification-item")) closeNotificationSwipes();
+  if (!event.target.closest(".notification-item,.swipe-action-item")) closeNotificationSwipes();
   const nav = event.target.closest(".nav-link");
   if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") loadFinancialManagement(); if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "privacidade") loadPrivacyDashboard().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
   if (event.target.closest("[data-open=appointment]")) openAppointment();
@@ -2253,6 +2264,14 @@ document.addEventListener("click", event => {
     } else {
       openNotificationResolver(notification.dataset.notificationType || notification.dataset.notificationUrl)
         .catch(error => toast(error.message));
+    }
+  }
+  const swipeAction = event.target.closest(".swipe-action-item");
+  if (swipeAction && !event.target.closest(".swipe-actions")) {
+    if (swipeAction.dataset.swipeSuppress === "1") return;
+    if (swipeAction.classList.contains("is-swiped")) {
+      closeNotificationSwipes();
+      return;
     }
   }
   const resolveNotification = event.target.closest("[data-resolve-notification]");
