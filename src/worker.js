@@ -698,41 +698,47 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   });
   return alerts;
 }
-async function sendStudioPushAlerts(env, studio, mode) {
+async function sendStudioPushAlerts(env, studio, mode, options = {}) {
   const date = saoPauloDate();
   const alerts = await pushAlertItems(env.DB, studio.id, date, mode);
-  if (!alerts.length) return;
+  const stats = { alertas: alerts.length, enviados: 0, assinaturas: 0 };
+  if (!alerts.length) return stats;
   const { results: subscriptions } = await env.DB.prepare(`
     SELECT * FROM push_inscricoes
-    WHERE id_estudio=? AND ativo=1
-  `).bind(studio.id).all();
+    WHERE id_estudio=? AND ativo=1 AND (?=0 OR id_usuario=?)
+  `).bind(studio.id, options.userId ? 1 : 0, options.userId || 0).all();
+  stats.assinaturas = subscriptions.length;
+  const suffix = options.force ? `-manual-${Date.now()}` : "";
   for (const subscription of subscriptions) {
     const preferences = await pushPreferenceMap(env.DB, studio.id, subscription.id_usuario);
     for (const alert of alerts) {
       if (!pushEnabled(alert, preferences, mode)) continue;
-      const existing = await env.DB.prepare(`
-        SELECT id FROM push_notificacoes
-        WHERE id_estudio=? AND id_inscricao=? AND chave=? AND data_referencia=?
-      `).bind(studio.id, subscription.id, alert.chave, date).first();
-      if (existing) continue;
+      const alertKey = `${alert.chave}${suffix}`;
+      if (!options.force) {
+        const existing = await env.DB.prepare(`
+          SELECT id FROM push_notificacoes
+          WHERE id_estudio=? AND id_inscricao=? AND chave=? AND data_referencia=?
+        `).bind(studio.id, subscription.id, alertKey, date).first();
+        if (existing) continue;
+      }
       const inserted = await env.DB.prepare(`
         INSERT INTO push_notificacoes
           (id_estudio,id_usuario,id_inscricao,chave,tipo,titulo,mensagem,url,data_referencia)
         VALUES(?,?,?,?,?,?,?,?,?)
-      `).bind(studio.id, subscription.id_usuario, subscription.id, alert.chave,
+      `).bind(studio.id, subscription.id_usuario, subscription.id, alertKey,
         alert.tipo, alert.titulo, alert.mensagem, alert.url, date).run();
       try {
         const response = await sendPushNotification(env, subscription, {
           title: alert.titulo,
           body: alert.mensagem,
           url: alert.url,
-          tag: alert.chave,
+          tag: alertKey,
           urgency: alert.urgency
         });
         if ([404, 410].includes(response.status)) {
           await env.DB.prepare("UPDATE push_inscricoes SET ativo=0 WHERE id=?")
             .bind(subscription.id).run();
-        }
+        } else if (response.ok) stats.enviados++;
         await env.DB.batch([
           env.DB.prepare(`
             UPDATE push_notificacoes SET status='Enviado',resposta=?,data_envio=CURRENT_TIMESTAMP
@@ -749,6 +755,7 @@ async function sendStudioPushAlerts(env, studio, mode) {
       }
     }
   }
+  return stats;
 }
 async function sendScheduledPushAlerts(env) {
   const hour = Number(saoPauloHour());
@@ -3509,6 +3516,22 @@ async function api(request, env, url, user) {
       } else sent++;
     }
     return json({ ok: true, enviados: sent });
+  }
+  if (url.pathname === "/api/push/disparar-alertas" && request.method === "POST") {
+    const modes = ["morning", "evening", "hourly"];
+    const totals = { alertas: 0, enviados: 0, assinaturas: 0 };
+    for (const mode of modes) {
+      const result = await sendStudioPushAlerts(env, { id: studioId }, mode, {
+        userId: user.id,
+        force: true
+      });
+      totals.alertas += result.alertas || 0;
+      totals.enviados += result.enviados || 0;
+      totals.assinaturas = Math.max(totals.assinaturas, result.assinaturas || 0);
+    }
+    if (!totals.assinaturas) return error("Nenhum aparelho com notificação ativa.");
+    if (!totals.alertas) return error("Nenhum alerta real encontrado para disparar agora.");
+    return json({ ok: true, ...totals });
   }
   if (url.pathname === "/api/estudio/exportar" && request.method === "GET") {
     if (user.papel !== "SUPERADMIN" && user.perfil_acesso !== "ADMINISTRADOR") {

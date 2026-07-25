@@ -151,6 +151,9 @@ async function enablePushNotifications() {
 async function sendPushTest() {
   await post("/api/push/teste");
 }
+async function sendPushAlertsNow() {
+  return post("/api/push/disparar-alertas");
+}
 async function loadAgenda() {
   if (!calendar) {
     calendar = new FullCalendar.Calendar($("#calendar"), {
@@ -751,6 +754,7 @@ function openNotifications() {
       <div class="card-actions">
         <button class="primary" type="button" data-enable-push ${!pushSupported() || permission === "denied" ? "disabled" : ""}>Ativar neste aparelho</button>
         <button class="secondary" type="button" data-test-push ${permission !== "granted" ? "disabled" : ""}>Enviar teste</button>
+        <button class="secondary" type="button" data-send-alerts-now ${permission !== "granted" ? "disabled" : ""}>Disparar alertas reais agora</button>
       </div>
     </div>
     ${preferences ? `<details class="card notification-settings"><summary>Preferencias de alerta</summary>
@@ -2210,6 +2214,14 @@ document.addEventListener("click", event => {
   if (event.target.closest("[data-test-push]")) {
     sendPushTest()
       .then(() => toast("Notificação de teste enviada."))
+      .catch(error => toast(error.message));
+  }
+  if (event.target.closest("[data-send-alerts-now]")) {
+    sendPushAlertsNow()
+      .then(result => {
+        toast(`${result.enviados || 0} alerta(s) enviado(s).`);
+        loadNotifications().catch(() => {});
+      })
       .catch(error => toast(error.message));
   }
   const managementAction = event.target.closest("[data-management-action]");
