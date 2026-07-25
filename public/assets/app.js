@@ -46,6 +46,27 @@ const toast = message => {
   $("#toast").textContent = message; $("#toast").classList.add("show");
   setTimeout(() => $("#toast").classList.remove("show"), 2500);
 };
+function syncModalScrollLock() {
+  const hasOpenDialog = Boolean($("dialog[open]"));
+  if (hasOpenDialog && !document.body.classList.contains("modal-open")) {
+    modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    document.body.style.top = `-${modalScrollY}px`;
+    document.body.classList.add("modal-open");
+  } else if (!hasOpenDialog && document.body.classList.contains("modal-open")) {
+    document.body.classList.remove("modal-open");
+    document.body.style.removeProperty("top");
+    window.scrollTo(0, modalScrollY);
+  }
+}
+const modalObserver = new MutationObserver(syncModalScrollLock);
+function setupModalScrollLock() {
+  $$("dialog").forEach(dialog => {
+    modalObserver.observe(dialog, { attributes: true, attributeFilter: ["open"] });
+    dialog.addEventListener("close", syncModalScrollLock);
+    dialog.addEventListener("cancel", syncModalScrollLock);
+  });
+  syncModalScrollLock();
+}
 const send = (path, method, form) => api(path, {
   method, headers: { "content-type": "application/json" },
   body: JSON.stringify(Object.fromEntries(new FormData(form)))
@@ -118,6 +139,7 @@ let sessionUser = null;
 let studiosData = [];
 let pullRefreshSetup = false;
 let sessionAbortController = new AbortController();
+let modalScrollY = 0;
 const hasModule = module => Boolean(sessionUser?.modulos?.includes(module));
 const pushSupported = () => "serviceWorker" in navigator &&
   "PushManager" in window && "Notification" in window;
@@ -2418,6 +2440,7 @@ document.addEventListener("click", event => {
 $("#menuButton").onclick = () => $("#sidebar").classList.toggle("open");
 $("#notificationButton").onclick = openNotifications;
 $("#accountButton").onclick = () => openProfile().catch(error => toast(error.message));
+setupModalScrollLock();
 $("#clientSearch").oninput = event => loadClients(event.target.value);
 $("#appointmentForm").onsubmit = async event => {
   event.preventDefault(); await send("/api/agendamentos", "POST", event.currentTarget);
@@ -2519,6 +2542,8 @@ let applicationStarted = false;
 function clearApplicationState() {
   sessionAbortController.abort();
   sessionAbortController = new AbortController();
+  document.body.classList.remove("modal-open");
+  document.body.style.removeProperty("top");
   calendar?.destroy();
   calendar = null;
   selectedClientId = null;
