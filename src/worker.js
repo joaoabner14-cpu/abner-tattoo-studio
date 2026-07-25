@@ -944,7 +944,7 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
     const date = row.data_hora.slice(0, 10);
     const phone = row.telefone.replace(/\D/g, "");
     const message = encodeURIComponent(
-      `Olá, ${row.nome}, tudo bem?
+      `Olá, tudo bem?
 
 Você possui uma sessão de tatuagem agendada no ${studioName} dia *${brDateTime(row.data_hora)}*.
 
@@ -3696,7 +3696,9 @@ async function api(request, env, url, user) {
         tipo: type,
         itens: results.map(item => {
           const message = encodeURIComponent(
-            `Olá, ${item.nome}, tudo bem?\n\nVocê possui uma sessão de tatuagem agendada para *${brDateTime(item.data_hora)}*.\n\nConfirme sua presença respondendo SIM.`
+            `Olá, tudo bem?
+
+Você possui uma sessão de tatuagem agendada para *${brDateTime(item.data_hora)}*.\n\nConfirme sua presença respondendo SIM.`
           );
           return {
             ...item,
