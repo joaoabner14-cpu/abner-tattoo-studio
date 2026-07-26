@@ -199,15 +199,21 @@ async function loadAgenda() {
     calendar.render();
   } else calendar.refetchEvents();
   const grouped = await api("/api/agendamentos?tipo=lista");
+  const appointmentRow = item => {
+    const canConfirm = !item.cancelado && item.status === "Agendado";
+    const actions = `${item.link_whatsapp ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(item.link_whatsapp)}">Enviar confirmação</a>` : ""}${canConfirm ? `<button class="primary appointment-confirm" type="button" data-confirm-appointment="${item.id_agendamento}">Marcar confirmado</button>` : ""}`;
+    const content = `<button class="appointment-main open-order" data-id="${item.id_agendamento}">
+      <span class="appointment-person"><strong>${item.hora}</strong><span>·</span><span class="appointment-name">${escapeHtml(item.nome)}${item.tatuador ? ` · ${escapeHtml(item.tatuador)}` : ""}</span></span>
+      <span class="badge">${escapeHtml(item.status)}</span>
+    </button>`;
+    return `<div class="appointment-entry swipe-action-item">
+      <div class="swipe-actions">${actions}</div>
+      <div class="swipe-main">${content}</div>
+    </div>`;
+  };
   $("#appointmentList").innerHTML = Object.entries(grouped).map(([date, items]) => `
     <article class="card appointment-group"><div class="card-head"><strong>${date}</strong><span class="badge">${items.length}</span></div>
-    <div class="appointment-items">${items.map(item => `<div class="appointment-entry">
-      <button class="appointment-main open-order" data-id="${item.id_agendamento}">
-        <span class="appointment-person"><strong>${item.hora}</strong><span>·</span><span class="appointment-name">${escapeHtml(item.nome)}${item.tatuador ? ` · ${escapeHtml(item.tatuador)}` : ""}</span></span>
-        <span class="badge">${escapeHtml(item.status)}</span>
-      </button>
-      ${item.eh_amanha && !item.cancelado && item.status === "Agendado" ? `<button class="primary appointment-confirm" type="button" data-confirm-appointment="${item.id_agendamento}">Marcar confirmado</button>` : ""}
-    </div>`).join("")}</div></article>
+    <div class="appointment-items">${items.map(appointmentRow).join("")}</div></article>
   `).join("") || `<div class="panel empty">Nenhum agendamento futuro.</div>`;
   if (hasModule("financeiro")) loadFinance().catch(error => toast(error.message));
 }
@@ -718,7 +724,7 @@ async function openNotificationResolver(typeOrUrl = "") {
   } else if (["agenda_hoje", "agenda_amanha", "agenda_1h", "confirmacao_pendente"].includes(type)) {
     rows = items.map(x => swipeRow(
       `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${escapeHtml(x.status)}${x.tatuador ? ` · ${escapeHtml(x.tatuador)}` : ""}</div></div>`,
-      `<button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<button class="primary" type="button" data-confirm-appointment="${x.id_agendamento}">Marcar confirmado</button>` : ""}`
+      `<button class="secondary open-order" data-id="${x.id_agendamento}">Abrir OS</button>${type === "confirmacao_pendente" || type === "agenda_amanha" ? `<a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Enviar confirmação</a><button class="primary" type="button" data-confirm-appointment="${x.id_agendamento}">Marcar confirmado</button>` : ""}`
     )).join("");
   } else if (type === "pos_venda") {
     rows = items.map(x => swipeRow(
@@ -2150,12 +2156,19 @@ document.addEventListener("touchmove", event => {
 
 document.addEventListener("click", event => {
   const suppressedSwipeAction = event.target.closest(".notification-item,.swipe-action-item");
-  if (suppressedSwipeAction?.dataset.actionSwipeSuppress === "1") {
+  if (suppressedSwipeAction?.dataset.actionSwipeSuppress === "1" ||
+    suppressedSwipeAction?.dataset.swipeSuppress === "1") {
     event.preventDefault();
     event.stopPropagation();
     return;
   }
   if (!event.target.closest(".notification-item,.swipe-action-item")) closeNotificationSwipes();
+  const openSwipeMain = event.target.closest(".notification-item.is-swiped,.swipe-action-item.is-swiped");
+  if (openSwipeMain && !event.target.closest(".notification-actions,.swipe-actions")) {
+    event.preventDefault();
+    closeNotificationSwipes();
+    return;
+  }
   const nav = event.target.closest(".nav-link");
   if (nav?.dataset.page) { try { sessionStorage.setItem("activePage", nav.dataset.page); } catch {} $$(".nav-link,.page").forEach(x => x.classList.remove("active")); nav.classList.add("active"); $(`#${nav.dataset.page}`).classList.add("active"); $("#sidebar").classList.remove("open"); if (nav.dataset.page === "agenda") showAgenda().catch(error => toast(error.message)); if (nav.dataset.page === "clientes") { $("#clientSearch").value = ""; loadClients(); } if (nav.dataset.page === "financeiro") loadFinancialManagement(); if (nav.dataset.page === "estoque") loadStock(); if (nav.dataset.page === "marketing") loadMarketing().catch(error => toast(error.message)); if (nav.dataset.page === "privacidade") loadPrivacyDashboard().catch(error => toast(error.message)); if (nav.dataset.page === "estudios") loadStudios().catch(error => toast(error.message)); }
   if (event.target.closest("[data-open=appointment]")) openAppointment();
