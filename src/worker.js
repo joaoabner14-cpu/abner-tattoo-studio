@@ -279,6 +279,24 @@ function brDateTime(value) {
   return `${d}/${m}/${y}${time ? ` ${time.slice(0, 5)}` : ""}`;
 }
 
+function appointmentConfirmationMessage(dateTime) {
+  return `Olá, tudo bem?
+
+Você possui uma sessão de tatuagem agendada para *${brDateTime(dateTime)}*.
+
+Vou te passar um pequeno preparo para esse dia.
+
+Confirme sua presença respondendo SIM.
+
+Responda NÃO para cancelar ou solicite um REAGENDAMENTO.
+
+1- hidratação é muito importante, mantenha-se hidratada bebendo água regularmente 💧
+
+2- comece a passar hidratante na região onde será feita a tatuagem, uma pele bem hidratada pigmentará melhor e doerá bem menos 😉
+
+3- alimente-se antes da sessão, é ideal que esteja bem para que a tatuagem fique linda 🤩`;
+}
+
 function nextBusinessDay(value) {
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -943,23 +961,7 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
   )) {
     const date = row.data_hora.slice(0, 10);
     const phone = row.telefone.replace(/\D/g, "");
-    const message = encodeURIComponent(
-      `Olá, tudo bem?
-
-Você possui uma sessão de tatuagem agendada no ${studioName} dia *${brDateTime(row.data_hora)}*.
-
-Vou te passar um pequeno preparo para esse dia.
-
-Confirme sua presença respondendo SIM.
-
-Responda NÃO para cancelar ou solicite um REAGENDAMENTO.
-
-1- hidratação é muito importante, mantenha-se hidratada bebendo água regularmente 💧
-
-2- comece a passar hidratante na região onde será feita a tatuagem, uma pele bem hidratada pigmentará melhor e doerá bem menos 😉
-
-3- alimente-se antes da sessão, é ideal que esteja bem para que a tatuagem fique linda 🤩`
-    );
+    const message = encodeURIComponent(appointmentConfirmationMessage(row.data_hora));
     const key = brDateTime(date);
     (grouped[key] ||= []).push({
       id_agendamento: row.id, hora: row.data_hora.slice(11, 16), nome: row.nome,
@@ -3739,11 +3741,7 @@ async function api(request, env, url, user) {
       return json({
         tipo: type,
         itens: results.map(item => {
-          const message = encodeURIComponent(
-            `Olá, tudo bem?
-
-Você possui uma sessão de tatuagem agendada para *${brDateTime(item.data_hora)}*.\n\nConfirme sua presença respondendo SIM.`
-          );
+          const message = encodeURIComponent(appointmentConfirmationMessage(item.data_hora));
           return {
             ...item,
             data_agendamento: brDateTime(item.data_hora),
