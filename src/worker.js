@@ -3707,6 +3707,26 @@ async function api(request, env, url, user) {
     if (!result.meta.changes) return error("Notificação não encontrada.", 404);
     return json({ ok: true });
   }
+  const notificationGroupAction = url.pathname.match(/^\/api\/notificacoes\/grupo\/([a-z0-9_]+)\/resolver$/);
+  if (notificationGroupAction && request.method === "POST") {
+    const type = notificationGroupAction[1];
+    const today = saoPauloDate();
+    await db.batch([
+      db.prepare(`
+        UPDATE push_notificacoes
+        SET resolvida=1,data_resolucao=CURRENT_TIMESTAMP
+        WHERE id_estudio=? AND id_usuario=? AND tipo=? AND resolvida=0
+      `).bind(studioId, user.id, type),
+      db.prepare(`
+        INSERT INTO push_notificacoes
+          (id_estudio,id_usuario,chave,tipo,titulo,mensagem,url,data_referencia,
+            status,lida,resolvida,data_leitura,data_resolucao)
+        VALUES(?,?,?,?,?,?,?,?,'Enviado',1,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `).bind(studioId, user.id, `grupo-arquivado-${type}-${today}`, type,
+        "Grupo arquivado", `Alertas do grupo ${type} arquivados.`, "/", today)
+    ]);
+    return json({ ok: true });
+  }
   if (url.pathname === "/api/notificacoes/pendencias" && request.method === "GET") {
     const type = url.searchParams.get("tipo") || "";
     const today = saoPauloDate();
@@ -3784,12 +3804,19 @@ async function api(request, env, url, user) {
   if (url.pathname === "/api/notificacoes" && request.method === "GET") {
     const today = saoPauloDate();
     const preferences = await pushPreferenceMap(db, studioId, user.id);
+    const { results: archivedGroups } = await db.prepare(`
+      SELECT DISTINCT tipo FROM push_notificacoes
+      WHERE id_estudio=? AND id_usuario=? AND resolvida=1
+        AND data_referencia=? AND chave LIKE 'grupo-arquivado-%'
+    `).bind(studioId, user.id, today).all();
+    const archivedTypes = new Set(archivedGroups.map(item => item.tipo));
     const currentAlerts = [
       ...(await pushAlertItems(db, studioId, today, "morning")),
       ...(await pushAlertItems(db, studioId, today, "evening")),
       ...(await pushAlertItems(db, studioId, today, "hourly"))
     ].filter((item, index, list) =>
       list.findIndex(candidate => candidate.chave === item.chave) === index &&
+      !archivedTypes.has(item.tipo) &&
       pushEnabled(item, preferences, item.tipo === "agenda_amanha" ||
         item.tipo === "confirmacao_pendente" ? "evening" : item.tipo === "agenda_1h" ? "hourly" : "morning")
     ).map(item => ({
@@ -3832,6 +3859,7 @@ async function api(request, env, url, user) {
           url: "/#marketing", lida: 0, resolvida: 0, atual: true
         };
       }).filter(item => item.dias >= 0 && item.dias <= 30 &&
+        !archivedTypes.has(item.tipo) &&
         pushEnabled({ tipo: "marketing" }, preferences, "morning"));
     }
     const combined = [...currentAlerts, ...history, ...marketingItems]

@@ -771,7 +771,19 @@ function openNotifications() {
     <span><strong>${escapeHtml(item.rotulo)}</strong><small>${item.horario === "both" ? "Manhã e noite" : item.horario === "evening" ? "Noite" : "Manhã"}</small></span>
     <input type="checkbox" data-notification-preference="${escapeHtml(item.tipo)}" data-horario="${escapeHtml(item.horario)}" ${Number(item.ativo) ? "checked" : ""}>
   </label>`).join("");
-  const rows = notificationsData.map(item => {
+  const labels = Object.fromEntries(notificationPreferences.map(item => [item.tipo, item.rotulo]));
+  const fallbackLabels = {
+    agenda_hoje: "Agendamentos de hoje",
+    agenda_amanha: "Agendamentos de amanhã",
+    agenda_1h: "Sessões em breve",
+    confirmacao_pendente: "Confirmações pendentes",
+    sinal_pendente: "Sinais pendentes",
+    crediario_vencido: "Crediários vencidos",
+    contas_abertas: "Contas em aberto",
+    pos_venda: "Pós-venda",
+    marketing: "Marketing"
+  };
+  const notificationRow = item => {
     const storedId = /^\d+$/.test(String(item.id || "")) ? item.id : "";
     return `<article class="notification-item ${Number(item.lida) ? "is-read" : ""}" data-notification-id="${storedId}" data-notification-type="${escapeHtml(item.tipo || "")}" data-notification-url="${escapeHtml(item.url || "")}" data-notification-plan="${item.id_planejamento || ""}" data-notification-key="${item.chave || ""}">
       ${storedId ? `<div class="notification-actions"><button class="notification-resolve" type="button" data-resolve-notification="${storedId}">Resolver</button></div>` : ""}
@@ -780,6 +792,22 @@ function openNotifications() {
         <span><strong>${escapeHtml(item.titulo)}</strong><small>${escapeHtml(item.mensagem)} - ${dateBr(item.data)}</small></span>
       </button>
     </article>`;
+  };
+  const groups = notificationsData.reduce((acc, item) => {
+    const type = item.tipo || "outros";
+    (acc[type] ||= []).push(item);
+    return acc;
+  }, {});
+  const rows = Object.entries(groups).map(([type, items]) => {
+    const unread = items.filter(item => !Number(item.lida)).length;
+    const title = labels[type] || fallbackLabels[type] || "Outras notificações";
+    return `<section class="notification-group">
+      <div class="notification-group-head">
+        <div><strong>${escapeHtml(title)}</strong><small>${items.length} alerta(s)${unread ? ` · ${unread} novo(s)` : ""}</small></div>
+        <button class="secondary archive-notification-group" type="button" data-archive-notification-group="${escapeHtml(type)}">Arquivar grupo</button>
+      </div>
+      <div class="notification-group-items">${items.map(notificationRow).join("")}</div>
+    </section>`;
   }).join("") || `<div class="card muted">Nenhuma notificação interna no momento.</div>`;
   const dialog = $("#actionDialog");
   if (dialog.open) dialog.close();
@@ -2361,6 +2389,12 @@ document.addEventListener("click", event => {
   if (resolveNotification) {
     api(`/api/notificacoes/${resolveNotification.dataset.resolveNotification}/resolver`, { method: "POST" })
       .then(async () => { await loadNotifications(); openNotifications(); })
+      .catch(error => toast(error.message));
+  }
+  const archiveNotificationGroup = event.target.closest("[data-archive-notification-group]");
+  if (archiveNotificationGroup) {
+    api(`/api/notificacoes/grupo/${encodeURIComponent(archiveNotificationGroup.dataset.archiveNotificationGroup)}/resolver`, { method: "POST" })
+      .then(async () => { await loadNotifications(); openNotifications(); toast("Grupo arquivado."); })
       .catch(error => toast(error.message));
   }
   const notificationPreferencesForm = event.target.closest("#notificationPreferencesForm button[type=submit]");
