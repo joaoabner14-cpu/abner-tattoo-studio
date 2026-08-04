@@ -615,7 +615,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
     if (results.length) alerts.push({
       chave: `agenda-amanha-${tomorrow}`,
       tipo: "agenda_amanha",
-      titulo: `${results.length} sessão(?es) amanhã`,
+      titulo: `${results.length} sessão(ões) amanhã`,
       mensagem: results.slice(0, 3).map(item =>
         `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
       url: "/?notificacao=agenda_amanha#agenda"
@@ -636,7 +636,7 @@ async function pushAlertItems(db, studioId, date = saoPauloDate(), mode = "morni
   if (summary.agendamentos_hoje?.length) alerts.push({
     chave: `agenda-hoje-${date}`,
     tipo: "agenda_hoje",
-    titulo: `${summary.agendamentos_hoje.length} sessão(?es) hoje`,
+    titulo: `${summary.agendamentos_hoje.length} sessão(ões) hoje`,
     mensagem: summary.agendamentos_hoje.slice(0, 3).map(item =>
       `${brDateTime(item.data_hora)} - ${item.nome}`).join("\n"),
     url: "/?notificacao=agenda_hoje#agenda",
@@ -3833,7 +3833,7 @@ async function api(request, env, url, user) {
       atual: true
     }));
     const { results: history } = await db.prepare(`
-      SELECT id,tipo,titulo,mensagem,url,data_referencia data,lida,resolvida,status,data_criacao,data_envio
+      SELECT id,chave,tipo,titulo,mensagem,url,data_referencia data,lida,resolvida,status,data_criacao,data_envio
       FROM push_notificacoes
       WHERE id_estudio=? AND id_usuario=? AND resolvida=0
       ORDER BY lida ASC,data_criacao DESC LIMIT 60
@@ -3862,9 +3862,15 @@ async function api(request, env, url, user) {
         !archivedTypes.has(item.tipo) &&
         pushEnabled({ tipo: "marketing" }, preferences, "morning"));
     }
+    const notificationDedupeKey = item => {
+      const key = String(item.chave || "").replace(/-manual-\d+$/, "");
+      return key
+        ? `${item.tipo}|${key}|${item.data || ""}`
+        : `${item.tipo}|${item.titulo}|${item.mensagem}|${item.data || ""}`;
+    };
     const combined = [...currentAlerts, ...history, ...marketingItems]
       .filter((item, index, list) =>
-        list.findIndex(candidate => String(candidate.chave || candidate.id) === String(item.chave || item.id)) === index)
+        list.findIndex(candidate => notificationDedupeKey(candidate) === notificationDedupeKey(item)) === index)
       .sort((a, b) => Number(a.lida || 0) - Number(b.lida || 0) ||
         String(b.data || "").localeCompare(String(a.data || "")));
     return json({ itens: combined, preferencias: [...preferences.values()] });
