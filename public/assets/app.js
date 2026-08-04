@@ -812,18 +812,18 @@ function openNotifications() {
   const dialog = $("#actionDialog");
   if (dialog.open) dialog.close();
   $("#actionContent").innerHTML = `<header><h2>Notificações</h2><button class="close" type="button">X</button></header>
-    <div class="card push-card"><strong>Notificações do app</strong><small class="muted">${escapeHtml(pushText)}</small>
-      <div class="card-actions">
-        <button class="primary" type="button" data-enable-push ${!pushSupported() || permission === "denied" ? "disabled" : ""}>Ativar neste aparelho</button>
-        <button class="secondary" type="button" data-test-push ${permission !== "granted" ? "disabled" : ""}>Enviar teste</button>
-        <button class="secondary" type="button" data-send-alerts-now ${permission !== "granted" ? "disabled" : ""}>Disparar alertas reais agora</button>
+    <details class="card notification-settings"><summary>Ajustes de notificações</summary>
+      <div class="push-card"><strong>Notificações do app</strong><small class="muted">${escapeHtml(pushText)}</small>
+        <div class="card-actions">
+          <button class="primary" type="button" data-enable-push ${!pushSupported() || permission === "denied" ? "disabled" : ""}>Ativar neste aparelho</button>
+          <button class="secondary" type="button" data-test-push ${permission !== "granted" ? "disabled" : ""}>Enviar teste</button>
+          <button class="secondary" type="button" data-send-alerts-now ${permission !== "granted" ? "disabled" : ""}>Disparar alertas reais agora</button>
+        </div>
       </div>
-    </div>
-    ${preferences ? `<details class="card notification-settings"><summary>Preferências de alerta</summary>
-      <form id="notificationPreferencesForm" class="notification-preferences">${preferences}
+      ${preferences ? `<form id="notificationPreferencesForm" class="notification-preferences">${preferences}
         <button class="secondary" type="submit">Salvar preferências</button>
-      </form>
-    </details>` : ""}
+      </form>` : ""}
+    </details>
     <div class="notification-list">${rows}</div>`;
   dialog.showModal();
 }
