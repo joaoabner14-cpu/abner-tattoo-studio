@@ -1762,6 +1762,23 @@ async function createInstallments(db, request, studioId) {
   return json({ ok: true }, 201);
 }
 
+async function refreshFinancialStatus(db, financialId) {
+  const row = await db.prepare(`
+    SELECT valor_final,
+      COALESCE((SELECT SUM(CASE WHEN tipo IN ('Pagamento','Sinal') THEN valor
+        WHEN tipo='Estorno' THEN -valor ELSE 0 END)
+        FROM financeiro_movimentos WHERE id_financeiro=financeiro.id),0) total_pago
+    FROM financeiro WHERE id=?
+  `).bind(financialId).first();
+  if (!row) return;
+  const paid = Number(row.total_pago || 0);
+  const finalValue = Number(row.valor_final || 0);
+  const status = paid >= finalValue && finalValue > 0
+    ? "Pago" : paid > 0 ? "Parcial" : "Pendente";
+  await db.prepare("UPDATE financeiro SET status=? WHERE id=?")
+    .bind(status, financialId).run();
+}
+
 async function payInstallment(db, request, url, studioId) {
   const installmentId = integer(url.pathname.split("/")[3]);
   const installment = await db.prepare(`
@@ -1777,30 +1794,82 @@ async function payInstallment(db, request, url, studioId) {
   if (installment.status === "Cancelado") return error("Esta parcela está cancelada.");
   const data = await body(request);
   const paymentDate = data.data_pagamento || saoPauloDate();
+  const paidValue = number(data.valor) || Number(installment.valor_parcela);
+  if (paidValue <= 0) return error("Informe um valor válido para o recebimento.");
+  const paymentMethod = ["Pix", "Dinheiro", "Debito", "Credito"].includes(data.forma_pagamento)
+    ? data.forma_pagamento : "Pix";
   const observation = data.observacao ||
     `Parcela ${installment.numero_parcela}/${installment.total_parcelas} do crediário`;
   await db.batch([
     db.prepare(`
       INSERT INTO financeiro_movimentos
         (id_financeiro,id_crediario,tipo,valor,forma_pagamento,observacao,data_pagamento)
-      VALUES(?,?,'Pagamento',?,'Pix',?,?)
-    `).bind(installment.id_financeiro, installment.id, installment.valor_parcela,
+      VALUES(?,?,'Pagamento',?,?,?,?)
+    `).bind(installment.id_financeiro, installment.id, paidValue, paymentMethod,
       observation, paymentDate),
     db.prepare(`
       INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,id_cliente,id_financeiro,id_os,forma_pagamento)
-      VALUES(?,?,'Entrada','Crediário',?,?,?,?,?,'Pix')
+      VALUES(?,?,'Entrada','Crediário',?,?,?,?,?,?)
     `).bind(studioId, paymentDate, observation,
-      installment.valor_parcela, installment.id_cliente, installment.id_financeiro, installment.id_os),
+      paidValue, installment.id_cliente, installment.id_financeiro, installment.id_os,
+      paymentMethod),
     db.prepare("UPDATE crediario SET status='Pago',data_pagamento=? WHERE id=?")
       .bind(paymentDate, installment.id)
   ]);
-  const pending = await db.prepare(`
-    SELECT COUNT(*) total FROM crediario WHERE id_financeiro=? AND status IN ('Pendente','Atrasado')
-  `).bind(installment.id_financeiro).first();
-  if (!pending.total) {
-    await db.prepare("UPDATE financeiro SET status='Pago' WHERE id=?").bind(installment.id_financeiro).run();
-  }
+  await refreshFinancialStatus(db, installment.id_financeiro);
   return json({ ok: true }, 201);
+}
+
+async function cancelInstallment(db, request, url, studioId) {
+  const installmentId = integer(url.pathname.split("/")[3]);
+  const installment = await db.prepare(`
+    SELECT cr.id,cr.id_financeiro,cr.numero_parcela,cr.status,cr.data_pagamento,
+      cr.valor_parcela,f.id_cliente,f.id_os
+    FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
+    WHERE cr.id=? AND f.id_estudio=?
+  `).bind(installmentId, studioId).first();
+  if (!installment) return error("Parcela não encontrada.", 404);
+  if (installment.status === "Cancelado") return error("Esta parcela já está cancelada.");
+  const data = await body(request);
+  const today = saoPauloDate();
+  const reason = String(data.motivo || "").trim();
+  const note = `Cancelamento da parcela ${installment.numero_parcela}${reason ? ` - ${reason}` : ""}`;
+  const movements = await db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN tipo='Pagamento' THEN valor
+        WHEN tipo='Estorno' THEN -valor ELSE 0 END),0) total,
+      COALESCE((SELECT forma_pagamento FROM financeiro_movimentos
+        WHERE id_crediario=? AND tipo='Pagamento'
+        ORDER BY COALESCE(data_pagamento,data_movimento) DESC,id DESC LIMIT 1),'Pix') forma
+    FROM financeiro_movimentos WHERE id_crediario=?
+  `).bind(installment.id, installment.id).first();
+  const paidValue = Math.max(0, Number(movements?.total || 0));
+  const statements = [
+    db.prepare(`
+      UPDATE crediario SET status='Cancelado',data_pagamento=NULL,
+        observacoes=TRIM(COALESCE(observacoes,'') || ?)
+      WHERE id=?
+    `).bind(`${installment.status === "Pago" ? "\n" : ""}${note}`, installment.id)
+  ];
+  if (paidValue > 0) {
+    statements.push(
+      db.prepare(`
+        INSERT INTO financeiro_movimentos
+          (id_financeiro,id_crediario,tipo,valor,forma_pagamento,observacao,data_pagamento)
+        VALUES(?,?,'Estorno',?,?,?,?)
+      `).bind(installment.id_financeiro, installment.id, paidValue,
+        movements.forma || "Pix", note, today),
+      db.prepare(`
+        INSERT INTO caixa(id_estudio,data_movimento,tipo,categoria,descricao,valor,
+          id_cliente,id_financeiro,id_os,forma_pagamento)
+        VALUES(?,?,'Saida','Estorno',?,?,?,?,?,?)
+      `).bind(studioId, today, note, paidValue, installment.id_cliente,
+        installment.id_financeiro, installment.id_os, movements.forma || "Pix")
+    );
+  }
+  await db.batch(statements);
+  await refreshFinancialStatus(db, installment.id_financeiro);
+  return json({ ok: true, estorno: paidValue });
 }
 
 async function finance(db, request, url, studioId) {
@@ -4242,6 +4311,8 @@ async function api(request, env, url, user) {
     return createInstallments(db, request, studioId);
   if (request.method === "POST" && /^\/api\/crediario\/\d+\/pagar$/.test(url.pathname))
     return payInstallment(db, request, url, studioId);
+  if (request.method === "POST" && /^\/api\/crediario\/\d+\/cancelar$/.test(url.pathname))
+    return cancelInstallment(db, request, url, studioId);
   if (["/api/movimentos", "/api/ajustes"].includes(url.pathname))
     return finance(db, request, url, studioId);
   if (request.method === "GET" && /^\/api\/clientes\/\d+\/(historico|financeiro)$/.test(url.pathname))

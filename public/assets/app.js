@@ -1338,7 +1338,8 @@ async function loadClientLegacy(id) {
     return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
       <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${item.status === "Pago" ? "Pago" : late ? "Atrasado" : "Pendente"}</span>
-      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}</div></div>`;
+      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}
+      <button type="button" class="danger cancel-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}">Cancelar parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhum crediário.</div>`;
   const movementHistory = finance.movimentos.map(item => `<div class="financial-movement">
     <div><strong>${escapeHtml(item.tipo)}</strong><span class="muted">OS #${item.id_os} · ${dateBr(item.data_pagamento)}${item.forma_pagamento ? ` · ${escapeHtml(item.forma_pagamento)}` : ""}</span></div>
@@ -1437,7 +1438,8 @@ async function loadClient(id) {
     return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
       <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
-      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button></div></div>`;
+      <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>
+      <button type="button" class="danger cancel-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}">Cancelar parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
   const orderStatements = (crm.demonstrativos_os || []).map(statement => {
     const title = statement.id_os ? `OS #${statement.id_os}` : "Ordem de serviço";
@@ -1959,12 +1961,13 @@ function openInstallmentPayment(trigger) {
   const number = trigger.dataset.number || "";
   if ($("#actionDialog").open) $("#actionDialog").close();
   $("#actionContent").innerHTML = `<header><h2>Receber parcela${number ? ` ${number}` : ""}</h2><button class="close" type="button">×</button></header>
-    <form id="installmentPaymentForm"><label>Valor<input value="${moneyInput(trigger.dataset.value)}" readonly></label>
-    <label>Forma<input value="Pix" readonly></label>
+    <form id="installmentPaymentForm"><label>Valor recebido<input name="valor" data-money inputmode="numeric" value="${moneyInput(trigger.dataset.value)}" required></label>
+    <label>Forma<select name="forma_pagamento"><option>Pix</option><option>Dinheiro</option><option>Debito</option><option>Credito</option></select></label>
     <label>Data<input name="data_pagamento" type="date" value="${todaySp()}" required></label>
     <label>Observação<input name="observacao" value="CREDIÁRIO${number ? ` - PARCELA ${number}` : ""}"></label>
     <button class="primary">Confirmar recebimento</button></form>`;
   $("#actionDialog").showModal();
+  applyInputMasks($("#installmentPaymentForm"));
   $("#installmentPaymentForm").onsubmit = async event => {
     event.preventDefault();
     await post(`/api/crediario/${trigger.dataset.id}/pagar`,
@@ -2005,7 +2008,8 @@ async function openOrder(appointmentId, initialTab = "os-data") {
     return `<div class="card installment-card">
       <div><strong>Parcela ${item.numero_parcela}/${item.total_parcelas}</strong><div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${status}</span>
-      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${data.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}</div>
+      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${data.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}
+      <button type="button" class="danger cancel-installment" data-id="${item.id}" data-appointment="${data.id_agendamento || ""}">Cancelar parcela</button></div>
     </div>`;
   }).join("")}</div>` : "";
   const financeEvents = [
@@ -2478,6 +2482,21 @@ document.addEventListener("click", event => {
   }
   const installment = event.target.closest(".pay-installment");
   if (installment) openInstallmentPayment(installment);
+  const installmentCancellation = event.target.closest(".cancel-installment");
+  if (installmentCancellation) {
+    const reason = prompt("Motivo do cancelamento da parcela (opcional):") || "";
+    if (!confirm("Cancelar esta parcela do crediário? Se ela já foi paga, será lançado um estorno.")) return;
+    post(`/api/crediario/${installmentCancellation.dataset.id}/cancelar`, { motivo: reason })
+      .then(async result => {
+        toast(result.estorno ? `Parcela cancelada e estorno lançado: ${money(result.estorno)}.` : "Parcela cancelada.");
+        calendar?.refetchEvents();
+        if ($("#orderDialog").open && activeOrderData?.id_agendamento) await refreshOrder("os-finance");
+        if (selectedClientId) await loadClient(selectedClientId);
+        if (managementData) await loadFinancialManagement(managementData.periodo, managementData.visao,
+          managementData.data_inicio, managementData.data_fim);
+        await loadFinance();
+      }).catch(error => toast(error.message));
+  }
   const material = event.target.closest(".remove-material");
   if (material) {
     if (!confirm("Remover este material da ordem de serviço?")) return;
