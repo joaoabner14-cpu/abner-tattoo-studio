@@ -1701,6 +1701,37 @@ async function dashboard(db, studioId) {
     ORDER BY cr.data_vencimento
   `).bind(studioId).all();
   const late = installments.filter(x => x.vencimento < today);
+  const { results: balanceRows } = await db.prepare(`
+    SELECT f.id id_financeiro, f.id_os, a.id id_agendamento, c.nome, c.telefone,
+      f.valor_final, f.valor_sinal, f.sinal_pago, COALESCE(a.data_hora,f.data_criacao) data_referencia,
+      COALESCE((SELECT SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
+        WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
+        FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago,
+      COALESCE((SELECT SUM(cr.valor_parcela) FROM crediario cr
+        WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')),0) parcelas_abertas
+    FROM financeiro f
+    JOIN clientes c ON c.id=f.id_cliente
+    LEFT JOIN ordem_servico os ON os.id=f.id_os
+    LEFT JOIN agendamentos a ON a.id=os.id_agendamento
+    WHERE f.id_estudio=? AND f.status<>'Cancelado'
+      AND (a.id IS NULL OR a.status<>'Cancelado')
+    ORDER BY COALESCE(a.data_hora,f.data_criacao)
+  `).bind(studioId).all();
+  const residualBalances = balanceRows
+    .map(item => {
+      const totalOpen = Math.max(0, Number(item.valor_final || 0) - Number(item.pago || 0));
+      const pendingSignal = Number(item.sinal_pago) ? 0 : Number(item.valor_sinal || 0);
+      const residual = Math.max(0, totalOpen - Number(item.parcelas_abertas || 0) - pendingSignal);
+      return {
+        ...item,
+        valor: Math.round(residual * 100) / 100,
+        vencido: item.data_referencia?.slice(0, 10) < today
+      };
+    })
+    .filter(item => item.valor > 0);
+  const residualLateTotal = residualBalances
+    .filter(item => item.vencido)
+    .reduce((sum, item) => sum + item.valor, 0);
     const cash = await db.prepare(`
       SELECT
         COALESCE(SUM(CASE WHEN tipo='Entrada' AND substr(data_movimento,1,10)=? THEN valor ELSE 0 END),0) hoje,
@@ -1711,9 +1742,13 @@ async function dashboard(db, studioId) {
     resumo: {
       receber_hoje: cash.hoje,
       receber_mes: cash.mes,
-      atrasado: late.reduce((sum, item) => sum + item.valor, 0)
+      atrasado: late.reduce((sum, item) => sum + item.valor, 0) + residualLateTotal
     },
     sinais_pendentes: signals.map(x => ({ ...x, data_agendamento: brDateTime(x.data_hora) })),
+    saldos_pendentes: residualBalances.map(item => ({
+      ...item,
+      data_referencia_br: brDateTime(item.data_referencia)
+    })),
     parcelas_atrasadas: late.map(item => {
       const message = encodeURIComponent(
         `Olá, ${item.nome}, tudo bem?\n\nIdentificamos que a parcela ${item.parcela}/${item.total_parcelas} do seu crediário, no valor de R$ ${Number(item.valor).toFixed(2).replace(".", ",")}, venceu em *${brDateTime(item.vencimento)}*.\n\nPor favor, entre em contato para regularizarmos o pagamento.`
@@ -2197,12 +2232,14 @@ async function financialManagement(db, request, url, studioId) {
     `).bind(studioId, generalView ? 1 : 0, periodStart, periodEnd).first();
     const { results: clientReceivables } = await db.prepare(`
       SELECT f.id id_financeiro,f.id_os,a.id id_agendamento,c.nome,
-        f.valor_final,a.data_hora,
+        f.valor_final,a.data_hora,COALESCE(a.data_hora,f.data_criacao) data_referencia,
         COALESCE((SELECT SUM(CASE WHEN fm.tipo IN ('Pagamento','Sinal') THEN fm.valor
           WHEN fm.tipo='Estorno' THEN -fm.valor ELSE 0 END)
           FROM financeiro_movimentos fm WHERE fm.id_financeiro=f.id),0) pago,
         EXISTS(SELECT 1 FROM crediario cr
           WHERE cr.id_financeiro=f.id AND cr.status<>'Cancelado') tem_crediario,
+        COALESCE((SELECT SUM(cr.valor_parcela) FROM crediario cr
+          WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')),0) parcelas_abertas,
         COALESCE((SELECT SUM(cr.valor_parcela) FROM crediario cr
           WHERE cr.id_financeiro=f.id AND cr.status IN ('Pendente','Atrasado')
             AND (?=1 OR cr.data_vencimento BETWEEN ? AND ?)),0) parcelas_periodo
@@ -2215,16 +2252,28 @@ async function financialManagement(db, request, url, studioId) {
       ORDER BY COALESCE(a.data_hora,f.data_criacao)
     `).bind(generalView ? 1 : 0, periodStart, periodEnd, studioId).all();
     const monthlyClientReceivables = clientReceivables
-      .map(item => ({
-        ...item,
-        saldo: item.tem_crediario
-          ? Number(item.parcelas_periodo)
-          : generalView || (item.data_hora?.slice(0, 10) >= periodStart &&
-              item.data_hora?.slice(0, 10) <= periodEnd)
-            ? Math.max(0, item.valor_final - item.pago)
-            : 0
-      }))
+      .map(item => {
+        const totalOpen = Math.max(0, Number(item.valor_final || 0) - Number(item.pago || 0));
+        const residual = Math.max(0, totalOpen - Number(item.parcelas_abertas || 0));
+        const referenceDate = item.data_referencia?.slice(0, 10);
+        const residualInPeriod = generalView || (referenceDate >= periodStart && referenceDate <= periodEnd)
+          ? residual : 0;
+        return {
+          ...item,
+          saldo: Number(item.parcelas_periodo || 0) + residualInPeriod,
+          saldo_residual: Math.round(residual * 100) / 100
+        };
+      })
       .filter(item => item.saldo > 0);
+    const overdueResiduals = clientReceivables
+      .map(item => {
+        const totalOpen = Math.max(0, Number(item.valor_final || 0) - Number(item.pago || 0));
+        const residual = Math.max(0, totalOpen - Number(item.parcelas_abertas || 0));
+        return { ...item, saldo_residual: Math.round(residual * 100) / 100 };
+      })
+      .filter(item => item.saldo_residual > 0 && item.data_referencia?.slice(0, 10) < today);
+    const overdueResidualTotal = overdueResiduals
+      .reduce((sum, item) => sum + Number(item.saldo_residual || 0), 0);
     const overdueBills = await db.prepare(`
       SELECT COALESCE(SUM(valor),0) total FROM gestao_financeira
       WHERE id_estudio=? AND status='Pendente' AND data_vencimento<?
@@ -2296,12 +2345,13 @@ async function financialManagement(db, request, url, studioId) {
         receber: manualReceivable.total +
           monthlyClientReceivables.reduce((sum, item) => sum + item.saldo, 0),
         pagar: payable.total,
-        atrasado: overdueBills.total + overdueCredit.total,
+        atrasado: overdueBills.total + overdueCredit.total + overdueResidualTotal,
         faturamento_anual: annual.faturamento,
         limite_mei: 81000
       },
       lancamentos: launches, caixa: cashHistory,
       recebiveis_clientes: monthlyClientReceivables,
+      saldos_atrasados: overdueResiduals,
       crediarios_atrasados: overdueCredits,
       despesas_categoria: expenseCategories, faturamento_mensal: monthlyRevenue
     });

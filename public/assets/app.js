@@ -255,6 +255,10 @@ async function loadFinance() {
     <button class="card stat summary-card" data-home-summary="pagar"><span class="muted">A pagar</span><strong>${money(summary.pagar)}</strong></button>
     <button class="card stat stat-late summary-card" data-home-summary="atraso"><span class="muted">Em atraso</span><strong>${money(summary.atrasado)}</strong></button>
   </div><h2>Sinais pendentes</h2>${data.sinais_pendentes.map(x => `<div class="card card-head"><div><strong>${escapeHtml(x.nome)}</strong><div class="muted">${x.data_agendamento} · ${money(x.valor)}</div></div><button class="primary receive-signal" data-id="${x.id_agendamento}" data-value="${Number(x.valor)}">Receber sinal</button></div>`).join("") || `<div class="card muted">Nenhum sinal pendente.</div>`}
+  <h2>Saldos pendentes</h2>${(data.saldos_pendentes || []).map(x => `<div class="card overdue-card ${x.vencido ? "is-overdue" : ""}">
+    <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">OS #${x.id_os || "-"} · ${money(x.valor)}${x.vencido ? " · pendente" : ""}</div></div>
+    <div class="card-actions">${x.id_agendamento ? `<button class="primary open-order" data-id="${x.id_agendamento}">Abrir OS</button>` : ""}</div>
+  </div>`).join("") || `<div class="card muted">Nenhum saldo pendente fora do crediário.</div>`}
   <h2>Parcelas atrasadas</h2>${data.parcelas_atrasadas.map(x => `<div class="card overdue-card">
     <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>
     <div class="card-actions"><a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button></div>
@@ -380,6 +384,10 @@ function openSummaryDetails(kind, source = managementData) {
       ...(source.crediarios_atrasados || []).map(item => ({
         title: item.nome, detail: `OS #${item.id_os} · venceu ${dateBr(item.data_vencimento)}`,
         value: item.valor, appointmentId: item.id_agendamento
+      })),
+      ...(source.saldos_atrasados || []).map(item => ({
+        title: item.nome, detail: `OS #${item.id_os} · saldo aberto`,
+        value: item.saldo_residual, appointmentId: item.id_agendamento
       }))
     ];
   }
