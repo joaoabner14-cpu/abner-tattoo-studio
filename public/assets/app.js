@@ -201,12 +201,13 @@ async function loadAgenda() {
   const grouped = await api("/api/agendamentos?tipo=lista");
   const appointmentRow = item => {
     const canConfirm = !item.cancelado && item.status === "Agendado";
+    const pendingConfirmation = canConfirm;
     const actions = `${item.link_whatsapp ? `<a class="secondary" target="_blank" rel="noopener" href="${escapeHtml(item.link_whatsapp)}">Enviar confirmação</a>` : ""}${canConfirm ? `<button class="primary appointment-confirm" type="button" data-confirm-appointment="${item.id_agendamento}">Marcar confirmado</button>` : ""}`;
     const content = `<button class="appointment-main open-order" data-id="${item.id_agendamento}">
       <span class="appointment-person"><strong>${item.hora}</strong><span>·</span><span class="appointment-name">${escapeHtml(item.nome)}${item.tatuador ? ` · ${escapeHtml(item.tatuador)}` : ""}</span></span>
-      <span class="badge">${escapeHtml(item.status)}</span>
+      <span class="badge ${pendingConfirmation ? "badge-pending-confirmation" : ""}">${pendingConfirmation ? "Confirmar" : escapeHtml(item.status)}</span>
     </button>`;
-    return `<div class="appointment-entry swipe-action-item">
+    return `<div class="appointment-entry swipe-action-item ${pendingConfirmation ? "is-pending-confirmation" : ""}">
       <div class="swipe-actions">${actions}</div>
       <div class="swipe-main">${content}</div>
     </div>`;

@@ -860,14 +860,18 @@ async function listAppointments(db, url, studioId, studioName, enabledModules) {
     if (!enabledModules.has("marketing")) marketing.length = 0;
     const appointments = results.filter(x => x.status.toLowerCase() !== "cancelado")
       .map(x => {
-        const color = x.status === "Concluido" ? "#36b37e" : x.cor_agenda || "#735f3c";
+        const pendingConfirmation = x.status === "Agendado";
+        const color = x.status === "Concluido"
+          ? "#36b37e"
+          : pendingConfirmation ? "#f59e0b" : x.cor_agenda || "#735f3c";
         return {
         id: `agendamento-${x.id}`,
         title: `${x.nome}${x.tatuador ? ` · ${x.tatuador}` : ""}`,
         start: x.data_hora.replace(" ", "T"),
         backgroundColor: color,
         borderColor: color,
-        textColor: x.status === "Concluido" ? "#071a11" : undefined,
+        textColor: x.status === "Concluido" || pendingConfirmation ? "#111214" : undefined,
+        classNames: pendingConfirmation ? ["event-pending-confirmation"] : [],
         extendedProps: {
           tipo: "agendamento", id_agendamento: x.id,
           id_tatuador: x.id_tatuador, tatuador: x.tatuador,
