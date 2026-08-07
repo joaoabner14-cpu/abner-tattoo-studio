@@ -1907,6 +1907,32 @@ async function cancelInstallment(db, request, url, studioId) {
   return json({ ok: true, estorno: paidValue });
 }
 
+async function updateInstallmentDueDate(db, request, url, studioId) {
+  const installmentId = integer(url.pathname.split("/")[3]);
+  const installment = await db.prepare(`
+    SELECT cr.id,cr.id_financeiro,cr.numero_parcela,cr.status,cr.data_vencimento
+    FROM crediario cr JOIN financeiro f ON f.id=cr.id_financeiro
+    WHERE cr.id=? AND f.id_estudio=?
+  `).bind(installmentId, studioId).first();
+  if (!installment) return error("Parcela não encontrada.", 404);
+  if (installment.status === "Pago") return error("Não é possível alterar o vencimento de uma parcela paga.");
+  if (installment.status === "Cancelado") return error("Não é possível alterar o vencimento de uma parcela cancelada.");
+  const data = await body(request);
+  const dueDate = required(data.data_vencimento, "novo vencimento");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return error("Informe uma data de vencimento válida.");
+  const today = saoPauloDate();
+  const status = dueDate < today ? "Atrasado" : "Pendente";
+  const reason = String(data.motivo || "").trim();
+  const note = `Alteração de vencimento da parcela ${installment.numero_parcela}: ${brDateTime(installment.data_vencimento)} para ${brDateTime(dueDate)}${reason ? ` - ${reason}` : ""}`;
+  await db.prepare(`
+    UPDATE crediario
+    SET data_vencimento=?,status=?,observacoes=TRIM(COALESCE(observacoes,'') || ?)
+    WHERE id=?
+  `).bind(dueDate, status, `\n${note}`, installment.id).run();
+  await refreshFinancialStatus(db, installment.id_financeiro);
+  return json({ ok: true });
+}
+
 async function finance(db, request, url, studioId) {
   const osId = integer(url.searchParams.get("id_os"));
   if (request.method === "GET" && url.pathname === "/api/movimentos") {
@@ -4361,6 +4387,8 @@ async function api(request, env, url, user) {
     return createInstallments(db, request, studioId);
   if (request.method === "POST" && /^\/api\/crediario\/\d+\/pagar$/.test(url.pathname))
     return payInstallment(db, request, url, studioId);
+  if (request.method === "PUT" && /^\/api\/crediario\/\d+\/vencimento$/.test(url.pathname))
+    return updateInstallmentDueDate(db, request, url, studioId);
   if (request.method === "POST" && /^\/api\/crediario\/\d+\/cancelar$/.test(url.pathname))
     return cancelInstallment(db, request, url, studioId);
   if (["/api/movimentos", "/api/ajustes"].includes(url.pathname))

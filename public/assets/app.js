@@ -261,7 +261,7 @@ async function loadFinance() {
   </div>`).join("") || `<div class="card muted">Nenhum saldo pendente fora do crediário.</div>`}
   <h2>Parcelas atrasadas</h2>${data.parcelas_atrasadas.map(x => `<div class="card overdue-card">
     <div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>
-    <div class="card-actions"><a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button></div>
+    <div class="card-actions"><a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="secondary change-installment-due" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-due="${x.vencimento}">Alterar vencimento</button><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button></div>
   </div>`).join("") || `<div class="card muted">Nenhuma parcela atrasada.</div>`}`;
   $("#financePanel").innerHTML = html;
 }
@@ -722,7 +722,7 @@ async function openNotificationResolver(typeOrUrl = "") {
   if (type === "crediario_vencido") {
     rows = items.map(x => swipeRow(
       `<div><strong>${escapeHtml(x.nome)}</strong><div class="muted">Parcela ${x.parcela}/${x.total_parcelas} · ${money(x.valor)} · venceu ${dateBr(x.vencimento)}</div></div>`,
-      `<a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button>`,
+      `<a class="secondary" target="_blank" rel="noopener" href="${x.link_whatsapp}">Cobrar</a><button class="secondary change-installment-due" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-due="${x.vencimento}">Alterar vencimento</button><button class="primary pay-installment" data-id="${x.id}" data-appointment="${x.id_agendamento || ""}" data-number="${x.parcela}/${x.total_parcelas}" data-value="${x.valor}">Receber</button>`,
       "overdue-card"
     )).join("");
   } else if (type === "sinal_pendente") {
@@ -1346,7 +1346,7 @@ async function loadClientLegacy(id) {
     return `<div class="card installment-card"><div><strong>OS #${item.id_os} · Parcela ${item.numero_parcela}/${item.total_parcelas}</strong>
       <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${item.status === "Pago" ? "Pago" : late ? "Atrasado" : "Pendente"}</span>
-      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}
+      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button><button type="button" class="secondary change-installment-due" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-due="${item.data_vencimento}">Alterar vencimento</button>` : ""}
       <button type="button" class="danger cancel-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}">Cancelar parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhum crediário.</div>`;
   const movementHistory = finance.movimentos.map(item => `<div class="financial-movement">
@@ -1447,6 +1447,7 @@ async function loadClient(id) {
       <div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${late ? "Atrasada" : "Pendente"}</span>
       <button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>
+      <button type="button" class="secondary change-installment-due" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-due="${item.data_vencimento}">Alterar vencimento</button>
       <button type="button" class="danger cancel-installment" data-id="${item.id}" data-appointment="${item.id_agendamento || ""}">Cancelar parcela</button></div></div>`;
   }).join("") || `<div class="card muted">Nenhuma parcela em aberto.</div>`;
   const orderStatements = (crm.demonstrativos_os || []).map(statement => {
@@ -1994,6 +1995,40 @@ function openInstallmentPayment(trigger) {
   };
 }
 
+function openInstallmentDueDate(trigger) {
+  const orderWasOpen = $("#orderDialog").open;
+  const number = trigger.dataset.number || "";
+  if ($("#actionDialog").open) $("#actionDialog").close();
+  $("#actionContent").innerHTML = `<header><h2>Alterar vencimento${number ? ` ${number}` : ""}</h2><button class="close" type="button">×</button></header>
+    <form id="installmentDueDateForm">
+      <label>Novo vencimento<input name="data_vencimento" type="date" value="${trigger.dataset.due || todaySp()}" required></label>
+      <label>Motivo ou acordo feito com o cliente<input name="motivo" placeholder="Ex.: combinado novo prazo pelo WhatsApp"></label>
+      <button class="primary">Salvar vencimento</button>
+    </form>`;
+  $("#actionDialog").showModal();
+  $("#installmentDueDateForm").onsubmit = async event => {
+    event.preventDefault();
+    await api(`/api/crediario/${trigger.dataset.id}/vencimento`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))
+    });
+    $("#actionDialog").close();
+    toast("Vencimento atualizado.");
+    calendar?.refetchEvents();
+    if (orderWasOpen) await refreshOrder();
+    else {
+      if (selectedClientId) {
+        await loadClient(selectedClientId);
+        $("[data-tab=crm-finance]", $("#clientDetail"))?.click();
+      }
+      await loadFinance();
+      if (managementData) await loadFinancialManagement(managementData.periodo, managementData.visao,
+        managementData.data_inicio, managementData.data_fim);
+    }
+  };
+}
+
 async function openOrder(appointmentId, initialTab = "os-data") {
   const [data, tattooers] = await Promise.all([
     api(`/api/os?id=${appointmentId}`), api("/api/tatuadores")
@@ -2016,7 +2051,7 @@ async function openOrder(appointmentId, initialTab = "os-data") {
     return `<div class="card installment-card">
       <div><strong>Parcela ${item.numero_parcela}/${item.total_parcelas}</strong><div class="muted">${dateBr(item.data_vencimento)} · ${money(item.valor_parcela)}</div></div>
       <div class="installment-state"><span class="badge ${late ? "badge-late" : ""}">${status}</span>
-      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${data.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button>` : ""}
+      ${item.status !== "Pago" ? `<button type="button" class="secondary pay-installment" data-id="${item.id}" data-appointment="${data.id_agendamento}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-value="${item.valor_parcela}">Receber parcela</button><button type="button" class="secondary change-installment-due" data-id="${item.id}" data-appointment="${data.id_agendamento || ""}" data-number="${item.numero_parcela}/${item.total_parcelas}" data-due="${item.data_vencimento}">Alterar vencimento</button>` : ""}
       <button type="button" class="danger cancel-installment" data-id="${item.id}" data-appointment="${data.id_agendamento || ""}">Cancelar parcela</button></div>
     </div>`;
   }).join("")}</div>` : "";
@@ -2490,6 +2525,8 @@ document.addEventListener("click", event => {
   }
   const installment = event.target.closest(".pay-installment");
   if (installment) openInstallmentPayment(installment);
+  const installmentDueDate = event.target.closest(".change-installment-due");
+  if (installmentDueDate) openInstallmentDueDate(installmentDueDate);
   const installmentCancellation = event.target.closest(".cancel-installment");
   if (installmentCancellation) {
     const reason = prompt("Motivo do cancelamento da parcela (opcional):") || "";
