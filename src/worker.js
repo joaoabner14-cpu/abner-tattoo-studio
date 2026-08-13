@@ -3981,6 +3981,9 @@ async function api(request, env, url, user) {
       resolvida: 0,
       atual: true
     }));
+    const currentOneHourKeys = new Set(
+      currentAlerts.filter(item => item.tipo === "agenda_1h").map(item => item.chave)
+    );
     const { results: history } = await db.prepare(`
       SELECT id,chave,tipo,titulo,mensagem,url,data_referencia data,lida,resolvida,status,data_criacao,data_envio
       FROM push_notificacoes
@@ -4018,6 +4021,7 @@ async function api(request, env, url, user) {
         : `${item.tipo}|${item.titulo}|${item.mensagem}|${item.data || ""}`;
     };
     const combined = [...currentAlerts, ...history, ...marketingItems]
+      .filter(item => item.tipo !== "agenda_1h" || currentOneHourKeys.has(item.chave))
       .filter((item, index, list) =>
         list.findIndex(candidate => notificationDedupeKey(candidate) === notificationDedupeKey(item)) === index)
       .sort((a, b) => Number(a.lida || 0) - Number(b.lida || 0) ||
