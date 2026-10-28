@@ -316,7 +316,7 @@ async function nextFutureAppointmentSiriText(db, studioId = null) {
     LIMIT 1
   `).bind(targetStudioId).first();
   if (!row) {
-    return "Nenhum atendimento futuro agendado no momento.";
+    return "Não há próximos agendamentos.";
   }
   const [datePart, timePart = "00:00:00"] = String(row.data_hora || "").split(" ");
   const [year, month, day] = String(datePart || "0000-00-00").split("-");
