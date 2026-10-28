@@ -297,6 +297,34 @@ Responda NÃO para cancelar ou solicite um REAGENDAMENTO.
 3- alimente-se antes da sessão, é ideal que esteja bem para que a tatuagem fique linda 🤩`;
 }
 
+async function nextFutureAppointmentSiriText(db, studioId = null) {
+  const resolvedStudio = studioId
+    ? await db.prepare("SELECT id FROM estudios WHERE id=? AND ativo=1 LIMIT 1").bind(studioId).first()
+    : await db.prepare("SELECT id FROM estudios WHERE ativo=1 ORDER BY id LIMIT 1").first();
+  const targetStudioId = Number(resolvedStudio?.id || 0);
+  if (!targetStudioId) {
+    return "O seu próximo atendimento vai ser dia -, às - com -.";
+  }
+  const row = await db.prepare(`
+    SELECT a.data_hora, c.nome cliente
+    FROM agendamentos a
+    JOIN clientes c ON c.id = a.id_cliente
+    WHERE a.id_estudio=?
+      AND a.status NOT IN ('Cancelado','Concluido')
+      AND a.data_hora >= datetime('now')
+    ORDER BY a.data_hora ASC
+    LIMIT 1
+  `).bind(targetStudioId).first();
+  if (!row) {
+    return "Nenhum atendimento futuro agendado no momento.";
+  }
+  const [datePart, timePart = "00:00:00"] = String(row.data_hora || "").split(" ");
+  const [year, month, day] = String(datePart || "0000-00-00").split("-");
+  const dateText = `${day || "00"}/${month || "00"}/${year || "0000"}`;
+  const timeText = String(timePart).slice(0, 5) || "00:00";
+  return `O seu próximo atendimento vai ser dia ${dateText}, às ${timeText} com ${row.cliente}.`;
+}
+
 function nextBusinessDay(value) {
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -4406,6 +4434,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      if (url.pathname === "/api/agendamentos/proximo" && request.method === "GET") {
+        const studioId = integer(url.searchParams.get("id_estudio"));
+        const siriText = await nextFutureAppointmentSiriText(env.DB, studioId);
+        return json({ siri_text: siriText });
+      }
       if (url.pathname.startsWith("/api/auth/")) return await authApi(env.DB, request, url);
       if (url.pathname.startsWith("/api/")) {
         const user = await currentUser(env.DB, request);
